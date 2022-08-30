@@ -57,13 +57,13 @@ BSD 3-Clause License. See [LICENSE](./LICENSE).
 
 [**Provably-Safe Multilingual Software Sandboxing using
 WebAssembly**](https://www.usenix.org/conference/usenixsecurity22/presentation/bosamiya).
-Jay Bosamiya, Wen Shih Lim, and Bryan Parno. To Appear in Proceedings
+Jay Bosamiya, Wen Shih Lim, and Bryan Parno. In Proceedings
 of the USENIX Security Symposium, August, 2022.
 
 ```bibtex
 @inproceedings{provably-safe-sandboxing-wasm,
   author    = {Bosamiya, Jay and Lim, Wen Shih and Parno, Bryan},
-  booktitle = {To Appear in Proceedings of the USENIX Security Symposium},
+  booktitle = {Proceedings of the USENIX Security Symposium},
   month     = {August},
   title     = {Provably-Safe Multilingual Software Sandboxing using {WebAssembly}},
   year      = {2022}
