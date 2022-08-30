@@ -17,6 +17,16 @@ impl<'a, T: AsMut<[u8]>> From<&'a mut T> for GuestMemWrapper<'a> {
     }
 }
 
+impl<'a> From<&'a mut [u8]> for GuestMemWrapper<'a> {
+    fn from(mem: &'a mut [u8]) -> Self {
+        GuestMemWrapper {
+            mem: RefCell::new(mem),
+            borrowed_regions: RefCell::new(BTreeMap::new()),
+            borrowed_regions_handle_freshness: Cell::new(0),
+        }
+    }
+}
+
 unsafe impl<'a> wiggle::GuestMemory for GuestMemWrapper<'a> {
     fn base(&self) -> (*mut u8, u32) {
         let base: &mut [u8] = &mut self.mem.borrow_mut();

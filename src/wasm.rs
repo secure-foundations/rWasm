@@ -19,6 +19,7 @@ pub mod syntax {
             I64,
             F32,
             F64,
+            Handle,
         }
 
         impl std::fmt::Display for ValType {
@@ -29,6 +30,7 @@ pub mod syntax {
                     I64 => write!(f, "i64"),
                     F32 => write!(f, "f32"),
                     F64 => write!(f, "f64"),
+                    Handle => write!(f, "Handle"),
                 }
             }
         }
@@ -141,6 +143,33 @@ pub mod syntax {
             #[derive(Debug)]
             pub enum CvtOp { ConvertSI32, ConvertUI32, ConvertSI64, ConvertUI64,
                              PromoteF32, DemoteF64, ReinterpretInt, }
+        }
+
+        pub mod mswasmop {
+            use super::MemArg;
+            #[derive(Debug)]
+            pub enum Op {
+                // [] -> [handle]
+                HandleNull,
+                // [i32] -> [handle]
+                NewSegment,
+                // [handle] -> []
+                FreeSegment,
+                // [handle, i32] -> [handle]
+                HandleAdd,
+                // [handle, i32] -> [handle]
+                HandleSub,
+                // [handle] -> [handle]
+                HandleLoad { memarg: MemArg },
+                // [dst:handle, val:handle] -> []
+                HandleStore { memarg: MemArg },
+                // [handle] -> [i32]
+                HandleGetOffset,
+                // [handle, handle] -> [i32]
+                HandleEq,
+                // [handle, handle] -> [i32]
+                HandleLt,
+            }
         }
 
         #[derive(Debug)]
@@ -286,6 +315,9 @@ pub mod syntax {
             Return,
             Call(FuncIdx),
             CallIndirect(TypeIdx),
+
+            // MS-Wasm instructions
+            MSWasm(mswasmop::Op),
         }
 
         #[derive(Debug)]
@@ -347,9 +379,15 @@ pub mod syntax {
             pub init: Vec<FuncIdx>,
         }
 
+        pub struct MSWasmInitHandle {
+            pub offset: u32,
+            pub size: u32,
+        }
+
         pub struct Data {
             pub data: MemIdx,
             pub offset: Expr,
+            pub mswasm_init_handles: Vec<MSWasmInitHandle>,
             pub init: Vec<Byte>,
         }
 

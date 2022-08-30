@@ -4,6 +4,12 @@ use color_eyre::eyre::eyre;
 use std::collections::HashMap;
 use std::convert::TryInto;
 
+/// Allow runtime parser customization to support Wasm variants.
+#[derive(Clone, Copy)]
+pub struct ParserOpts {
+    pub ms_wasm: bool,
+}
+
 type Parsed<'a, T> = crate::Maybe<(&'a [u8], T)>;
 
 macro_rules! trace {
@@ -25,14 +31,14 @@ macro_rules! generate {
     };
 
     ($id:ident($($fnarg:ident : $fntyp:ty),*) -> $ty:ty = $body: expr ) => {
-        fn $id(mut inp: &[u8], $($fnarg : $fntyp,)*) -> Parsed<$ty> {
+        fn $id(_opts: ParserOpts, mut inp: &[u8], $($fnarg : $fntyp,)*) -> Parsed<$ty> {
             with_dollar_sign! {
                 ($d:tt) => {
                     #[allow(unused_macros)]
                     macro_rules! run {
                         ($fn:ident) => { run!($fn()) };
                         ($fn:ident ($d($arg:expr),* ) ) => {{
-                            let (inp1, v) = $fn( inp, $d($arg,)*)?;
+                            let (inp1, v) = $fn( _opts, inp, $d($arg,)*)?;
                             inp = inp1;
                             v
                         }};
@@ -47,7 +53,7 @@ macro_rules! generate {
                     macro_rules! try_run {
                         ($fn:ident) => { try_run!($fn()) };
                         ($fn:ident ($d($arg:expr),* ) ) => {{
-                            match $fn( inp, $d($arg,)*) {
+                            match $fn( _opts, inp, $d($arg,)*) {
                                 Ok((inp1, v)) => {
                                     inp = inp1;
                                     Ok(v)
@@ -58,6 +64,25 @@ macro_rules! generate {
                     }
                 }
             }
+
+            with_dollar_sign! {
+                ($d:tt) => {
+                    #[allow(unused_macros)]
+                    macro_rules! run_manual {
+                        ($fn:ident ( $inp:ident, $d($arg:expr),* ) ) => {{
+                            let (inp1, v) = $fn( _opts, $inp, $d($arg,)*)?;
+                            $inp = inp1;
+                            v
+                        }};
+                        ($fn:ident ( $inp:ident ) ) => {{
+                            let (inp1, v) = $fn( _opts, $inp )?;
+                            $inp = inp1;
+                            v
+                        }};
+                    }
+                }
+            }
+
 
             #[allow(unused_macros)]
             macro_rules! dump {
@@ -88,6 +113,13 @@ macro_rules! generate {
                 }};
             }
 
+            #[allow(unused_macros)]
+            macro_rules! opt {
+                ($field:ident) => {{
+                    _opts.$field
+                }}
+            }
+
             let v = $body;
             Ok((inp, v))
         }
@@ -100,20 +132,20 @@ macro_rules! err {
     }}
 }
 
-macro_rules! run_manual {
-    ($fn:ident ( $inp:ident, $($arg:expr),* ) ) => {{
-        let (inp1, v) = $fn( $inp, $($arg,)*)?;
+macro_rules! run_manual_with_opts {
+    ($fn:ident ( $opts:ident, $inp:ident, $($arg:expr),* ) ) => {{
+        let (inp1, v) = $fn( $opts, $inp, $($arg,)*)?;
         $inp = inp1;
         v
     }};
-    ($fn:ident ( $inp:ident ) ) => {{
-        let (inp1, v) = $fn( $inp )?;
+    ($fn:ident ( $opts:ident, $inp:ident ) ) => {{
+        let (inp1, v) = $fn( $opts, $inp )?;
         $inp = inp1;
         v
     }};
 }
 
-fn leb128_u(mut inp: &[u8], bits: usize) -> Parsed<u64> {
+fn leb128_u(opts: ParserOpts, mut inp: &[u8], bits: usize) -> Parsed<u64> {
     let n = inp[0] as u64;
     inp = &inp[1..];
 
@@ -122,14 +154,14 @@ fn leb128_u(mut inp: &[u8], bits: usize) -> Parsed<u64> {
     if n < (1 << 7) && (bits == 64 || n < (1 << bits)) {
         Ok((inp, n))
     } else if n >= (1 << 7) && bits > 7 {
-        let (inp, m) = leb128_u(inp, bits - 7)?;
+        let (inp, m) = leb128_u(opts, inp, bits - 7)?;
         Ok((inp, (m << 7) + n - (1 << 7)))
     } else {
         err!("As per WASM spec, this branch for leb128_u should be impossible")
     }
 }
 
-fn leb128_s(mut inp: &[u8], bits: usize) -> Parsed<i64> {
+fn leb128_s(opts: ParserOpts, mut inp: &[u8], bits: usize) -> Parsed<i64> {
     let n = inp[0] as u64;
     inp = &inp[1..];
 
@@ -140,7 +172,7 @@ fn leb128_s(mut inp: &[u8], bits: usize) -> Parsed<i64> {
     } else if (1 << 6) <= n && n < (1 << 7) && n + (1u64 << (bits - 1)) >= (1 << 7) {
         Ok((inp, (n as i64) - (1 << 7)))
     } else if n >= (1 << 7) && bits > 7 {
-        let (inp, m) = leb128_s(inp, bits - 7)?;
+        let (inp, m) = leb128_s(opts, inp, bits - 7)?;
         Ok((inp, (m << 7) + (n as i64 - (1 << 7))))
     } else {
         err!("As per WASM spec, this branch for leb128_s should be impossible")
@@ -151,17 +183,19 @@ fn leb128_s(mut inp: &[u8], bits: usize) -> Parsed<i64> {
 mod test_leb128 {
     #[test]
     fn leb128_u_spot_tests() -> crate::Maybe<()> {
-        assert_eq!(super::leb128_u(&[0x00], 64)?.1, 0);
-        assert_eq!(super::leb128_u(&[0x01], 32)?.1, 1);
-        assert_eq!(super::leb128_u(&[0xc0, 0xc4, 0x07], 32)?.1, 123456);
+        let opts = super::ParserOpts { ms_wasm: false };
+        assert_eq!(super::leb128_u(opts, &[0x00], 64)?.1, 0);
+        assert_eq!(super::leb128_u(opts, &[0x01], 32)?.1, 1);
+        assert_eq!(super::leb128_u(opts, &[0xc0, 0xc4, 0x07], 32)?.1, 123456);
         Ok(())
     }
 
     #[test]
     fn leb128_s_spot_tests() -> crate::Maybe<()> {
-        assert_eq!(super::leb128_s(&[0x00], 64)?.1, 0);
-        assert_eq!(super::leb128_s(&[0x0ff, 0x00], 32)?.1, 127);
-        assert_eq!(super::leb128_s(&[0xc0, 0xbb, 0x78], 32)?.1, -123456);
+        let opts = super::ParserOpts { ms_wasm: false };
+        assert_eq!(super::leb128_s(opts, &[0x00], 64)?.1, 0);
+        assert_eq!(super::leb128_s(opts, &[0x0ff, 0x00], 32)?.1, 127);
+        assert_eq!(super::leb128_s(opts, &[0xc0, 0xbb, 0x78], 32)?.1, -123456);
         Ok(())
     }
 }
@@ -174,14 +208,14 @@ generate! {f64 -> f64 = f64::from_le_bytes(inp![..8].try_into()?)}
 
 generate! {s33 -> i64 = run!(leb128_s(33))}
 
-fn vec<T, F>(mut inp: &[u8], elem: F) -> Parsed<Vec<T>>
+fn vec<T, F>(opts: ParserOpts, mut inp: &[u8], elem: F) -> Parsed<Vec<T>>
 where
-    F: Fn(&[u8]) -> Parsed<T>,
+    F: Fn(ParserOpts, &[u8]) -> Parsed<T>,
 {
-    let len = run_manual!(u32(inp));
+    let len = run_manual_with_opts!(u32(opts, inp));
 
     let l = (0..len)
-        .map(|_| Ok(run_manual!(elem(inp))))
+        .map(|_| Ok(run_manual_with_opts!(elem(opts, inp))))
         .collect::<Maybe<Vec<T>>>()?;
     Ok((inp, l))
 }
@@ -190,11 +224,24 @@ generate! {byte -> u8 = inp![..1][0]}
 
 generate! {name -> String = String::from_utf8(run!(vec(byte)))?}
 
+fn only_on_ms_wasm<T: std::fmt::Debug>(ms_wasm: bool, val: T) -> crate::Maybe<T> {
+    if ms_wasm {
+        Ok(val)
+    } else {
+        err!(
+            "Trying to use {:?} which is only available in MS-Wasm mode. \
+              Please enable it to use this feature.",
+            val
+        )
+    }
+}
+
 generate! {valtype -> ValType = match run!(byte) {
     0x7f => ValType::I32,
     0x7e => ValType::I64,
     0x7d => ValType::F32,
     0x7c => ValType::F64,
+    0x6e => only_on_ms_wasm(opt!(ms_wasm), ValType::Handle)?,
     b => {
         err!("Invalid valtype {:#x}", b)
     }
@@ -262,29 +309,30 @@ generate! { blocktype -> BlockType = {
 }}
 
 fn vec_until_any<'a, 'b, T, F>(
+    opts: ParserOpts,
     mut inp: &'a [u8],
     elem: F,
     until: &'b [u8],
 ) -> Parsed<'a, (Vec<T>, u8)>
 where
-    F: Fn(&[u8]) -> Parsed<T>,
+    F: Fn(ParserOpts, &[u8]) -> Parsed<T>,
 {
     let mut v: u8 = inp[0];
     let mut res = vec![];
 
     while !until.contains(&v) {
-        res.push(run_manual!(elem(inp)));
+        res.push(run_manual_with_opts!(elem(opts, inp)));
         v = inp[0];
     }
     inp = &inp[1..];
     Ok((inp, (res, v)))
 }
 
-fn vec_until<T, F>(inp: &[u8], elem: F, until: u8) -> Parsed<Vec<T>>
+fn vec_until<T, F>(opts: ParserOpts, inp: &[u8], elem: F, until: u8) -> Parsed<Vec<T>>
 where
-    F: Fn(&[u8]) -> Parsed<T>,
+    F: Fn(ParserOpts, &[u8]) -> Parsed<T>,
 {
-    let (inp, (res, _)) = vec_until_any(inp, elem, &[until])?;
+    let (inp, (res, _)) = vec_until_any(opts, inp, elem, &[until])?;
     Ok((inp, res))
 }
 
@@ -564,6 +612,20 @@ generate! { instr -> Instr = {
             }
         }
 
+        // MS-Wasm instructions
+        0xf4 => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::NewSegment))?,
+        0xf5 => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::FreeSegment))?,
+        0xf7 => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::HandleLoad
+                                                             { memarg: run!(memarg) }))?,
+        0xf8 => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::HandleStore
+                                                             { memarg: run!(memarg) }))?,
+        0xf9 => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::HandleAdd))?,
+        0xfa => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::HandleSub))?,
+        0xfb => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::HandleNull))?,
+        0xfd => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::HandleEq))?,
+        0xfe => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::HandleLt))?,
+        0xff => only_on_ms_wasm(opt!(ms_wasm), Instr::MSWasm(mswasmop::Op::HandleGetOffset))?,
+
         b => err!("Invalid instruction {:#x}", b),
     }
 }}
@@ -592,9 +654,9 @@ macro_rules! section {
         section! {$n @ vec![], $name -> Vec<$ty> = $body}
     };
     ($n:literal @ $default:expr, $name:ident -> $ty:ty = $body:expr) => {
-        fn $name(mut inp: &[u8]) -> Parsed<$ty> {
+        fn $name(_opts: ParserOpts, mut inp: &[u8]) -> Parsed<$ty> {
             generate! { aux -> $ty = $body }
-            match expect_byte(inp, $n) {
+            match expect_byte(_opts, inp, $n) {
                 Ok((inp1, ())) => {
                     inp = inp1;
                 }
@@ -603,14 +665,14 @@ macro_rules! section {
                     return Ok((inp, $default));
                 }
             }
-            let (inp1, size) = u32(inp)?;
+            let (inp1, size) = u32(_opts, inp)?;
             inp = inp1;
             let size = size as usize;
             if inp.len() < size {
                 err!("Insufficient bytes for section {}", $n)
             }
             let mut inp_inner = &inp[..size];
-            let v = run_manual!(aux(inp_inner));
+            let v = run_manual_with_opts!(aux(_opts, inp_inner));
             if inp_inner.len() != 0 {
                 err!(
                     "Unexpected {} bytes remain for section {:#x}",
@@ -729,11 +791,25 @@ generate! { locals -> Vec<ValType> = {
 }}
 
 section! { 11, datasec -> Vec<Data> = run!(vec(data)) }
+generate! { mswasm_init_handle -> MSWasmInitHandle = {
+    let offset = run!(u32);
+    let size = run!(u32);
+    MSWasmInitHandle { offset, size }
+}}
 generate! { data -> Data = {
     let data = run!(memidx);
     let offset = run!(expr);
+    let mswasm_init_handles = if opt!(ms_wasm) {
+        let twice_num_init_handles = run!(u32);
+        assert!(twice_num_init_handles % 2 == 0);
+        (0..twice_num_init_handles / 2)
+            .map(|_| Ok(run!(mswasm_init_handle)))
+            .collect::<Maybe<Vec<_>>>()?
+    } else {
+        vec![]
+    };
     let init = run!(vec(byte));
-    Data { data, offset, init }
+    Data { data, offset, mswasm_init_handles, init }
 }}
 
 generate! { function_name -> (FuncIdx, Name) = {
@@ -879,8 +955,8 @@ generate! { module -> Module = {
     Module { types, funcs, tables, mems, globals, elem, data, start, imports, exports, names }
 }}
 
-pub fn parse(inp: &[u8]) -> Maybe<Module> {
-    let (inp, m) = module(inp)?;
+pub fn parse(opts: ParserOpts, inp: &[u8]) -> Maybe<Module> {
+    let (inp, m) = module(opts, inp)?;
     if !inp.is_empty() {
         err!("Found {} trailing bytes in the file", inp.len())
     }

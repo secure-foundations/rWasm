@@ -4,6 +4,7 @@ enum TaggedVal {
     I64(i64),
     F32(f32),
     F64(f64),
+    Handle(Handle), // <<MSWASMONLY>>
     Undefined,
 }
 
@@ -19,6 +20,7 @@ enum ValType {
     I64,
     F32,
     F64,
+    Handle, // <<MSWASMONLY>>
     Undefined,
 }
 
@@ -29,6 +31,7 @@ impl From<TaggedVal> for ValType {
             TaggedVal::I64(_) => ValType::I64,
             TaggedVal::F32(_) => ValType::F32,
             TaggedVal::F64(_) => ValType::F64,
+            TaggedVal::Handle(_) => ValType::Handle, // <<MSWASMONLY>>
             TaggedVal::Undefined => ValType::Undefined,
         }
     }

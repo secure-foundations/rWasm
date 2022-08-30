@@ -538,13 +538,37 @@ fn print_instr(
             // Note: The spec explicitly states that the alignment
             // does not affect semantics, and exists only as a hint
             // for faster perf.
-            let dynamic_offset = pop!(i32);
-            let dst = push!();
-            let ea = format!("({} + {})", dynamic_offset, mem.memarg.offset);
-            let self_mem = if opts.fixed_mem_size.is_some() {
-                "*self.memory"
+            let dynamic_offset = if opts.ms_wasm {
+                pop!(Handle)
             } else {
-                "self.memory"
+                pop!(i32)
+            };
+            let dst = push!();
+            let ea = if opts.ms_wasm {
+                if opts.ms_wasm_baggy_bounds {
+                    format!("({}.add({})?.offset())", dynamic_offset, mem.memarg.offset)
+                } else {
+                    format!(
+                        "({}.add({})?.segment_offset()?)",
+                        dynamic_offset, mem.memarg.offset
+                    )
+                }
+            } else {
+                format!("({} + {})", dynamic_offset, mem.memarg.offset)
+            };
+            let self_mem = if opts.ms_wasm {
+                if opts.ms_wasm_baggy_bounds {
+                    format!("self.segments.get_data()")
+                } else {
+                    format!(
+                        "self.segments.get({}.segment_index()?)?.get_data()?",
+                        dynamic_offset
+                    )
+                }
+            } else if opts.fixed_mem_size.is_some() {
+                "*self.memory".into()
+            } else {
+                "self.memory".into()
             };
             let mem_reader = match &mem.extend {
                 None => format!("read_mem_{}(&{}, {} as usize)", mem.typ, self_mem, ea),
@@ -564,27 +588,53 @@ fn print_instr(
             let mem_trace = if opts.memory_tracing {
                 format!(
                     r#"eprintln!(
-                           "[{}] memory<{{}}*64k={{:#x}}> load {}{} {{:#x}} -> {{:?}}",
-                           self.memory.len() / 65536,
-                           self.memory.len(),
+                           "[{}] memory<{}> load {}{} {{:#x}} -> {{:?}}",
+                           {},
+                           {},
                            {},
                            {},
                        );"#,
                     get_func_name(m, fn_id),
+                    if opts.ms_wasm_baggy_bounds {
+                        "base {:#x} of {:#x} allocated"
+                    } else if opts.ms_wasm {
+                        "idx {} of {} segments"
+                    } else {
+                        "{}*64k={:#x}"
+                    },
                     match &mem.extend {
                         None => "".into(),
                         Some((n, sx)) => format!("[SX {}{}]", sx, n),
                     },
                     mem.typ,
+                    if opts.ms_wasm_baggy_bounds {
+                        format!("{}.bounds_base_offset()?", dynamic_offset)
+                    } else if opts.ms_wasm {
+                        format!("{}.segment_index()?", dynamic_offset)
+                    } else {
+                        "self.memory.len() / 65536".into()
+                    },
+                    if opts.ms_wasm_baggy_bounds {
+                        "self.segments.memory.len()"
+                    } else if opts.ms_wasm {
+                        "self.segments.len()"
+                    } else {
+                        "self.memory.len()"
+                    },
                     ea,
                     mem_reader,
                 )
             } else {
                 "".into()
             };
+            let mem_count = if opts.memory_op_counting {
+                "self.load_count += 1;"
+            } else {
+                ""
+            };
             Ok(format!(
-                "{}{} = TaggedVal::from({}?);",
-                mem_trace, dst, mem_reader
+                "{}{} = TaggedVal::from({}?);{}",
+                mem_trace, dst, mem_reader, mem_count
             ))
         }
         MemStore(mem) => {
@@ -592,46 +642,96 @@ fn print_instr(
             // does not affect semantics, and exists only as a hint
             // for faster perf.
             let src = pop!(mem.typ);
-            let dynamic_offset = pop!(i32);
-            let ea = format!("({} + {})", dynamic_offset, mem.memarg.offset);
+            let dynamic_offset = if opts.ms_wasm {
+                pop!(Handle)
+            } else {
+                pop!(i32)
+            };
+            let ea = if opts.ms_wasm {
+                if opts.ms_wasm_baggy_bounds {
+                    format!("({}.add({})?.offset())", dynamic_offset, mem.memarg.offset)
+                } else {
+                    format!(
+                        "({}.add({})?.segment_offset()?)",
+                        dynamic_offset, mem.memarg.offset
+                    )
+                }
+            } else {
+                format!("({} + {})", dynamic_offset, mem.memarg.offset)
+            };
             let mem_trace = if opts.memory_tracing {
                 format!(
                     r#"eprintln!(
-                           "[{}] memory<{{}}*64k={{:#x}}> store {}{} {{:#x}} {{:#x}}",
-                           self.memory.len() / 65536,
-                           self.memory.len(),
+                           "[{}] memory<{}> store {}{} {{:#x}} {{:#x}}",
+                           {},
+                           {},
                            {},
                            {},
                        );"#,
                     get_func_name(m, fn_id),
+                    if opts.ms_wasm_baggy_bounds {
+                        "base {:#x} of {:#x} allocated"
+                    } else if opts.ms_wasm {
+                        "idx {} of {} segments"
+                    } else {
+                        "{}*64k={:#x}"
+                    },
                     match &mem.bitwidth {
                         None => "".into(),
                         Some(n) => format!("[BW {}]", n),
                     },
                     mem.typ,
+                    if opts.ms_wasm_baggy_bounds {
+                        format!("{}.bounds_base_offset()?", dynamic_offset)
+                    } else if opts.ms_wasm {
+                        format!("{}.segment_index()?", dynamic_offset)
+                    } else {
+                        "self.memory.len() / 65536".into()
+                    },
+                    if opts.ms_wasm_baggy_bounds {
+                        "self.segments.memory.len()"
+                    } else if opts.ms_wasm {
+                        "self.segments.len()"
+                    } else {
+                        "self.memory.len()"
+                    },
                     ea,
                     src,
                 )
             } else {
                 "".into()
             };
-            let self_mem = if opts.fixed_mem_size.is_some() {
-                "*self.memory"
+            let mem_count = if opts.memory_op_counting {
+                "self.store_count += 1;"
             } else {
-                "self.memory"
+                ""
+            };
+            let self_mem = if opts.ms_wasm {
+                if opts.ms_wasm_baggy_bounds {
+                    format!("self.segments.get_mut_data()")
+                } else {
+                    format!(
+                        "self.segments.get_mut({}.segment_index()?)?.get_mut_data({})?",
+                        dynamic_offset, ea,
+                    )
+                }
+            } else if opts.fixed_mem_size.is_some() {
+                "*self.memory".into()
+            } else {
+                "self.memory".into()
             };
             match &mem.bitwidth {
                 None => Ok(format!(
-                    "{}write_mem_{}(&mut {}, {} as usize, {})?;",
-                    mem_trace, mem.typ, self_mem, ea, src
+                    "{}write_mem_{}(&mut {}, {} as usize, {})?;{}",
+                    mem_trace, mem.typ, self_mem, ea, src, mem_count
                 )),
                 Some(n) => {
                     if mem.typ == wasm::syntax::ValType::I32
                         || mem.typ == wasm::syntax::ValType::I64
                     {
                         Ok(format!(
-                            "{}write_mem_u{}(&mut {}, {} as usize, {} as u{})?;",
-                            mem_trace, n, self_mem, ea, src, n
+                            "{}write_mem_u{}(&mut {}, {} as usize, {} as u{})?;{}",
+                            mem_trace, n, self_mem, ea, src, n, mem_count
                         ))
                     } else {
                         Err(eyre!("Invalid memory store"))?
@@ -1045,6 +1145,192 @@ fn print_instr(
                 ))
             }
         }
+        MSWasm(op) => {
+            // This assertion should always pass because the parser takes care of it
+            assert!(opts.ms_wasm, "Opcode {:?} requires MS-Wasm mode.", op);
+            use wasm::syntax::mswasmop::Op;
+            match op {
+                Op::HandleNull => {
+                    let dst = push!();
+                    Ok(format!("{} = TaggedVal::from(Handle::NULL);", dst))
+                }
+                Op::NewSegment => {
+                    let src = pop!(i32);
+                    let dst = push!();
+                    Ok(format!(
+                        "{} = TaggedVal::from(self.new_segment({} as u32)?);{}",
+                        dst,
+                        src,
+                        if opts.ms_wasm_segment_counting {
+                            "self.segment_new_count += 1;"
+                        } else {
+                            ""
+                        },
+                    ))
+                }
+                Op::FreeSegment => {
+                    let src = pop!(handle);
+                    Ok(format!(
+                        "self.free_segment({})?;{}",
+                        src,
+                        if opts.ms_wasm_segment_counting {
+                            "self.segment_free_count += 1;"
+                        } else {
+                            ""
+                        },
+                    ))
+                }
+                Op::HandleAdd => {
+                    let amt = pop!(i32);
+                    let src = pop!(handle);
+                    let dst = push!();
+                    Ok(format!("{} = TaggedVal::from({}.add({})?);", dst, src, amt))
+                }
+                Op::HandleSub => {
+                    let amt = pop!(i32);
+                    let src = pop!(handle);
+                    let dst = push!();
+                    Ok(format!("{} = TaggedVal::from({}.sub({})?);", dst, src, amt))
+                }
+                Op::HandleLoad { memarg } => {
+                    let src = pop!(handle);
+                    let dst = push!();
+
+                    let mem_reader = format!(
+                        "read!(get_handle, self.segments, {}.add({})?)",
+                        src, memarg.offset
+                    );
+
+                    let mem_trace = if opts.memory_tracing {
+                        format!(
+                            r#"eprintln!(
+                                   "[{}] memory<{}> handleload {{:#x}} -> {{:?}}",
+                                   {},
+                                   {},
+                                   {},
+                                   {},
+                               );"#,
+                            get_func_name(m, fn_id),
+                            if opts.ms_wasm_baggy_bounds {
+                                "base {:#x} of {:#x} allocated"
+                            } else {
+                                "idx {} of {} segments"
+                            },
+                            if opts.ms_wasm_baggy_bounds {
+                                format!("{}.bounds_base_offset()?", src)
+                            } else {
+                                format!("{}.segment_index()?", src)
+                            },
+                            if opts.ms_wasm_baggy_bounds {
+                                "self.segments.memory.len()"
+                            } else {
+                                "self.segments.len()"
+                            },
+                            if opts.ms_wasm_baggy_bounds {
+                                format!("{}.add({})?.offset()", src, memarg.offset)
+                            } else {
+                                format!("{}.add({})?.segment_offset()?", src, memarg.offset)
+                            },
+                            mem_reader,
+                        )
+                    } else {
+                        "".into()
+                    };
+                    let mem_count = if opts.memory_op_counting {
+                        "self.load_count += 1;"
+                    } else {
+                        ""
+                    };
+                    Ok(format!(
+                        "{}{} = TaggedVal::from({});{}",
+                        mem_trace, dst, mem_reader, mem_count
+                    ))
+                }
+                Op::HandleStore { memarg } => {
+                    let val = pop!(handle);
+                    let dst = pop!(handle);
+
+                    let mem_trace = if opts.memory_tracing {
+                        format!(
+                            r#"eprintln!(
+                                   "[{}] memory<{}> handlestore {{:#x}} {{:?}}",
+                                   {},
+                                   {},
+                                   {},
+                                   {},
+                               );"#,
+                            get_func_name(m, fn_id),
+                            if opts.ms_wasm_baggy_bounds {
+                                "base {:#x} of {:#x} allocated"
+                            } else {
+                                "idx {} of {} segments"
+                            },
+                            if opts.ms_wasm_baggy_bounds {
+                                format!("{}.bounds_base_offset()?", dst)
+                            } else {
+                                format!("{}.segment_index()?", dst)
+                            },
+                            if opts.ms_wasm_baggy_bounds {
+                                "self.segments.memory.len()"
+                            } else {
+                                "self.segments.len()"
+                            },
+                            if opts.ms_wasm_baggy_bounds {
+                                format!("{}.add({})?.offset()", dst, memarg.offset)
+                            } else {
+                                format!("{}.add({})?.segment_offset()?", dst, memarg.offset)
+                            },
+                            val,
+                        )
+                    } else {
+                        "".into()
+                    };
+                    let mem_count = if opts.memory_op_counting {
+                        "self.store_count += 1;"
+                    } else {
+                        ""
+                    };
+
+                    Ok(format!(
+                        "{}write!(store_handle, self.segments, {}.add({})?, {});{}",
+                        mem_trace, dst, memarg.offset, val, mem_count
+                    ))
+                }
+                Op::HandleGetOffset => {
+                    let handle = pop!(handle);
+                    let dst = push!();
+                    if opts.ms_wasm_baggy_bounds {
+                        Ok(format!(
+                            "{} = TaggedVal::from({}.handle_get_offset()?);",
+                            dst, handle
+                        ))
+                    } else {
+                        Ok(format!(
+                            "{} = TaggedVal::from({}.segment_offset()? as u32);",
+                            dst, handle
+                        ))
+                    }
+                }
+                Op::HandleEq => {
+                    let h2 = pop!(handle);
+                    let h1 = pop!(handle);
+                    let dst = push!();
+                    Ok(format!(
+                        "{} = TaggedVal::from({}.is_eq({}) as u32);",
+                        dst, h1, h2,
+                    ))
+                }
+                Op::HandleLt => {
+                    let h2 = pop!(handle);
+                    let h1 = pop!(handle);
+                    let dst = push!();
+                    Ok(format!(
+                        "{} = TaggedVal::from({}.is_lt({})? as u32);",
+                        dst, h1, h2,
+                    ))
+                }
+            }
+        }
     }
 }
 
@@ -1063,6 +1349,18 @@ fn reduced_instr_representation(i: &wasm::syntax::Instr) -> String {
     }
 }
 
+fn instruction_tracing_enabled(opts: &CmdLineOpts, fn_name: &String) -> bool {
+    if opts.instruction_tracing {
+        if opts.restrict_instruction_tracing_to.is_empty() {
+            true
+        } else {
+            opts.restrict_instruction_tracing_to.contains(fn_name)
+        }
+    } else {
+        false
+    }
+}
+
 fn print_instrs(
     ps: &mut PrinterState,
     m: &wasm::syntax::Module,
@@ -1075,13 +1373,18 @@ fn print_instrs(
         .iter()
         .map(|i| {
             let ins = print_instr(ps, m, fn_id, i, opts)?;
-            let ins = if opts.instruction_tracing {
+            let ins = if instruction_tracing_enabled(opts, &func_name) {
                 format!(
                     r#"eprintln!("[{}] {{}}", "{}"); {}"#,
                     func_name,
                     reduced_instr_representation(i),
                     ins
                 )
+            } else {
+                ins
+            };
+            let ins = if opts.instruction_counting {
+                format!("self.instruction_count += 1; {}", ins)
             } else {
                 ins
             };
@@ -1295,7 +1598,18 @@ fn print_function(
             result += &locals
                 .iter()
                 .enumerate()
-                .map(|(i, t)| format!("let mut local_{} : {} = 0{};", i + typ.from.0.len(), t, t))
+                .map(|(i, t)| {
+                    format!(
+                        "let mut local_{} : {} = {};",
+                        i + typ.from.0.len(),
+                        t,
+                        if let wasm::syntax::ValType::Handle = t {
+                            "Handle::NULL".into()
+                        } else {
+                            format!("0{}", t)
+                        }
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
 
@@ -1351,6 +1665,13 @@ fn print_function(
                         .collect::<Vec<_>>()
                         .join(", ");
                     if name == "proc_exit" {
+                        if opts.instruction_counting
+                            || opts.memory_op_counting
+                            || opts.ms_wasm_segment_counting
+                        {
+                            result += "self.counting_extension_report();";
+                        }
+
                         // Turns out wasi_common requires us to
                         // manually implement this one by explicitly
                         // marking it unimplemented. We simply want
@@ -1362,12 +1683,29 @@ fn print_function(
                         } else {
                             "self.memory"
                         };
+                        let wasi_module = if opts.ms_wasm {
+                            "ms_wasm_wasi"
+                        } else {
+                            "wasi_common::wasi::wasi_snapshot_preview1"
+                        };
+                        let guest_mem_wrap = if opts.ms_wasm {
+                            "&mut self.segments".into()
+                        } else {
+                            format!(
+                                "&guest_mem_wrapper::GuestMemWrapper::from(&mut {})",
+                                self_mem
+                            )
+                        };
                         let body = format!(
-                            "Some(wasi_common::wasi::wasi_snapshot_preview1::{}(\
+                            "Some({}::{}(\
                               &self.context, \
-                              &guest_mem_wrapper::GuestMemWrapper::from(&mut {}), \
-                              {}))",
-                            name, self_mem, args
+                              {}, \
+                              {}){})",
+                            wasi_module,
+                            name,
+                            guest_mem_wrap,
+                            args,
+                            if opts.ms_wasm { "?" } else { "" },
                         );
                         if opts.function_return_tracing {
                             result += &format!(
@@ -1400,15 +1738,19 @@ fn print_function(
 fn print_global_initializer(g: &wasm::syntax::Global) -> Maybe<String> {
     if g.init.0.len() != 1 {
         return Err(eyre!(
-            "Currently unsupported expression for global initialization"
+            "Currently unsupported expression for global initialization (bad-len): {:?}",
+            g.init.0
         ))?;
     }
-    if let wasm::syntax::Instr::Const(c) = &g.init.0[0] {
-        Ok(c.to_string())
-    } else {
-        Err(eyre!(
-            "Currently unsupported expression for global initialization"
-        ))?
+    match &g.init.0[0] {
+        wasm::syntax::Instr::Const(c) => Ok(c.to_string()),
+        wasm::syntax::Instr::MSWasm(wasm::syntax::mswasmop::Op::HandleNull) => {
+            Ok("Handle::NULL".to_string())
+        }
+        _ => Err(eyre!(
+            "Currently unsupported expression for global initialization (non-const): {:?}",
+            g.init.0[0]
+        ))?,
     }
 }
 
@@ -1454,12 +1796,18 @@ fn print_elem(self_name: &str, e: &wasm::syntax::Elem) -> Maybe<String> {
     }
 }
 
-fn print_data(self_name: &str, d: &wasm::syntax::Data) -> Maybe<String> {
+fn print_data(self_name: &str, d: &wasm::syntax::Data, opts: &CmdLineOpts) -> Maybe<String> {
     if d.data.0 != 0 {
         return Err(eyre!("Current version of WASM supports only 1 memory"))?;
     }
     if d.offset.0.len() != 1 {
         return Err(eyre!("Currently unsupported expression for data offset"))?;
+    }
+    if d.mswasm_init_handles.len() > 0 && !opts.ms_wasm {
+        unreachable!(
+            "Requesting handle initialization in non MSWasm mode. \
+             Should never happen, due to the parser performing the option check"
+        )
     }
     if let wasm::syntax::Instr::Const(c) = &d.offset.0[0] {
         let offset = match c {
@@ -1476,13 +1824,69 @@ fn print_data(self_name: &str, d: &wasm::syntax::Data) -> Maybe<String> {
             .map(|b| format!("{}", b))
             .collect::<Vec<_>>()
             .join(", ");
-        Ok(format!(
-            "{}.memory[{}..{}].copy_from_slice(&[{}]);",
-            self_name,
-            offset,
-            offset + len,
-            bytes
-        ))
+        let mswasm_extra_initialization = if opts.ms_wasm {
+            d.mswasm_init_handles
+                .iter()
+                .map(|i| {
+                    let hoffset = i.offset as usize;
+                    let hsize = i.size as usize;
+                    let newseg = if hsize == 0 {
+                        "Handle::NULL".into()
+                    } else {
+                        format!(
+                            "{{ {segment_counting}{self}.new_segment({size})? }}",
+                            segment_counting = if opts.ms_wasm_segment_counting {
+                                format!("{self}.segment_new_count += 1;", self = self_name)
+                            } else {
+                                "".into()
+                            },
+                            self = self_name,
+                            size = hsize
+                        )
+                    };
+                    let storehandle = format!(
+                        "write!(store_handle, {self}.segments, init_handle.add({offs})?, newseg);",
+                        self = self_name,
+                        offs = offset + hoffset
+                    );
+                    Ok(format!(
+                        "{{ let newseg = {newseg}; {storehandle} }}",
+                        newseg = newseg,
+                        storehandle = storehandle,
+                    ))
+                })
+                .collect::<Maybe<Vec<_>>>()?
+                .join("\n")
+        } else {
+            "".into()
+        };
+        if opts.ms_wasm_baggy_bounds {
+            Ok(format!(
+                "{}.segments.store_bytes(init_handle.add({}).unwrap(), &[{}]).unwrap();{}",
+                self_name, offset, bytes, mswasm_extra_initialization,
+            ))
+        } else if opts.ms_wasm {
+            let memory = format!(
+                "{}.segments.get_mut(init_handle.segment_index().unwrap()).unwrap().get_mut_data_slice({}, {}).unwrap()",
+                self_name, offset, offset + len,
+            );
+            Ok(format!(
+                "{}[{}..{}].copy_from_slice(&[{}]);{}",
+                memory,
+                offset,
+                offset + len,
+                bytes,
+                mswasm_extra_initialization,
+            ))
+        } else {
+            Ok(format!(
+                "{}.memory[{}..{}].copy_from_slice(&[{}]);",
+                self_name,
+                offset,
+                offset + len,
+                bytes,
+            ))
+        }
     } else {
         Err(eyre!("Currently unsupported expression for data offset"))?
     }
@@ -1813,22 +2217,32 @@ fn print_export(
         }
         wasm::syntax::ExportDesc::Mem(mem_idx) => {
             assert_eq!(mem_idx.0, 0);
-            if opts.generate_as_wasi_library {
+            if opts.ms_wasm {
                 Ok("impl WasmModule {
-                    #[allow(dead_code)]
-                    pub fn get_memory(&mut self) -> &mut [u8] {
-                        &mut self.memory
-                    }
-                }"
+                        #[allow(dead_code)]
+                        pub fn get_memory(&mut self) -> *mut u8 {
+                            panic!(\"Memory export currently unimplemented for MS Wasm\")
+                        }
+                    }"
                 .to_string())
             } else {
-                Ok("impl WasmModule {
-                    #[allow(dead_code)]
-                    pub fn get_memory(&mut self) -> *mut u8 {
-                        self.memory.as_mut_ptr()
-                    }
-                }"
-                .to_string())
+                if opts.generate_as_wasi_library {
+                    Ok("impl WasmModule {
+                            #[allow(dead_code)]
+                            pub fn get_memory(&mut self) -> &mut [u8] {
+                                &mut self.memory
+                            }
+                        }"
+                    .to_string())
+                } else {
+                    Ok("impl WasmModule {
+                            #[allow(dead_code)]
+                            pub fn get_memory(&mut self) -> *mut u8 {
+                                self.memory.as_mut_ptr()
+                            }
+                        }"
+                    .to_string())
+                }
             }
         }
         wasm::syntax::ExportDesc::Global(glb_idx) => {
@@ -1874,6 +2288,7 @@ fn print_cargo_toml(opts: &CmdLineOpts) -> Maybe<()> {
         .input_path
         .file_stem()
         .and_then(|n| n.to_str())
+        .map(|n| n.to_lowercase())
         .unwrap_or("wasmmodule".into());
     let dependencies = if opts.generate_wasi_executable {
         "\
@@ -1898,11 +2313,24 @@ edition = "2018"
 
 [profile.release]
 debug = true
+
+{features}
             "#,
             name = package_name,
             version = crate::PROGRAM_VERSION,
             generator = crate::PROGRAM_NAME,
             dependencies = dependencies,
+            features = if opts.ms_wasm_no_tags {
+                "[features]\n\
+                default = [\"notags\"]\n\
+                notags = []"
+            } else if opts.ms_wasm_packed_tags {
+                "[features]\n\
+                default = [\"packedtags\"]\n\
+                packedtags = []"
+            } else {
+                ""
+            },
         ),
     )?)
 }
@@ -1955,6 +2383,8 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
         // restricted _strictly_ to that module. It would be nice if
         // we could somehow "package" this unsafety away though.
         "mod guest_mem_wrapper;"
+    } else if opts.unsafe_linear_memory {
+        ""
     } else {
         "#![forbid(unsafe_code)]"
     };
@@ -1969,9 +2399,11 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
             {memory},
             globals: Vec<TaggedVal>,
             indirect_call_table: Vec<Option<usize>>,
-            {wasi_context}
+            {counting_extensions}{wasi_context}
          }}",
-        memory = if opts.fixed_mem_size.is_some() {
+        memory = if opts.ms_wasm {
+            "segments: Segments".to_string()
+        } else if opts.fixed_mem_size.is_some() {
             format!(
                 "memory: Box<[u8; {}]>, memory_size_to_vm: usize",
                 get_memory_backing_size(m, opts)?.0
@@ -1983,6 +2415,21 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
             "context: wasi_common::WasiCtx,"
         } else {
             ""
+        },
+        counting_extensions = {
+            let mut s = String::new();
+            if opts.instruction_counting {
+                s += "instruction_count: usize,";
+            }
+            if opts.memory_op_counting {
+                s += "load_count: usize,";
+                s += "store_count: usize,";
+            }
+            if opts.ms_wasm_segment_counting {
+                s += "segment_new_count: usize,";
+                s += "segment_free_count: usize,";
+            }
+            s
         },
     );
     let memory_accessors = {
@@ -2021,10 +2468,45 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
         memory_accessors
     };
 
+    let tagged_value_definitions = {
+        let template = include_str!("../templates-for-generation/tagged_value_definitions.rs");
+        if opts.ms_wasm {
+            template.into()
+        } else {
+            let template: &str = template;
+            template
+                .lines()
+                .filter(|l| !l.contains("<<MSWASMONLY>>"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    };
+
+    let ms_wasm_only = {
+        if opts.ms_wasm {
+            if opts.ms_wasm_baggy_bounds {
+                format!(
+                    "{}\n{}",
+                    include_str!("../templates-for-generation/ms_wasm_baggy_bounds.rs"),
+                    include_str!("../templates-for-generation/ms_wasm_wasi.rs")
+                )
+            } else {
+                format!(
+                    "{}\n{}",
+                    include_str!("../templates-for-generation/ms_wasm.rs"),
+                    include_str!("../templates-for-generation/ms_wasm_wasi.rs")
+                )
+            }
+        } else {
+            "".into()
+        }
+    };
+
     Ok(format!(
         "{module_prefix}{no_std}\n\n\
          {imports}\n\n\
          {tagged_value_definitions}\n\n\
+         {ms_wasm_only}\n\n\
          {wasm_module}\n\n\
          {memory_accessors}\n",
         module_prefix = module_prefix,
@@ -2034,8 +2516,8 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
         } else {
             include_str!("../templates-for-generation/imports.rs")
         },
-        tagged_value_definitions =
-            include_str!("../templates-for-generation/tagged_value_definitions.rs"),
+        tagged_value_definitions = tagged_value_definitions,
+        ms_wasm_only = ms_wasm_only,
         wasm_module = wasm_module,
         memory_accessors = memory_accessors,
     ))
@@ -2060,7 +2542,9 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
 
     let (mem_size, mem_size_to_vm) = get_memory_backing_size(m, opts)?;
 
-    let memory_init = if opts.fixed_mem_size.is_some() {
+    let memory_init = if opts.ms_wasm {
+        "segments: Segments::new()".into()
+    } else if opts.fixed_mem_size.is_some() {
         format!(
             "memory: Box::new([0u8; {}]), memory_size_to_vm: {}",
             mem_size,
@@ -2075,18 +2559,21 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
     generated += &format!(
         "impl WasmModule {{
              #[allow(unused_mut)]
-             pub fn new() -> Self {{
+             fn try_new() -> Option<Self> {{
                  let mut m = WasmModule {{
                      {memory_init},
                      globals: vec![],
                      indirect_call_table: vec![],
-                     {context} \
+                     {counting_extensions}{context} \
                  }};
                  m.globals.resize_with({globals_size}, Default::default);
                  {printed_globals}
                  {printed_elems}
-                 {printed_data}
-                 m
+                 {printed_data_prefix}{printed_data}
+                 Some(m)
+             }}
+             pub fn new() -> Self {{
+                 Self::try_new().unwrap()
              }}
          }}\n",
         context = if opts.generate_wasi_executable {
@@ -2094,6 +2581,19 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
                   .expect("Unable to initialize WASI context"),"#
         } else {
             ""
+        },
+        counting_extensions = {
+            let mut s = String::new();
+            if opts.instruction_counting {
+                s += "instruction_count: 0,";
+            }
+            if opts.memory_op_counting {
+                s += "load_count: 0,\nstore_count: 0,";
+            }
+            if opts.ms_wasm_segment_counting {
+                s += "segment_new_count: 0,\nsegment_free_count: 0,";
+            }
+            s
         },
         memory_init = memory_init,
         globals_size = globals.len(),
@@ -2112,9 +2612,27 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
             .map(|e| print_elem("m", e))
             .collect::<Maybe<Vec<_>>>()?
             .join("\n"),
+        printed_data_prefix = if opts.ms_wasm {
+            format!(
+                "let init_handle = m.new_segment({}).unwrap();{}{}\n",
+                mem_size,
+                if globals.len() >= 2 {
+                    "m.globals[1] = TaggedVal::from(init_handle); /* WORKAROUND for mswasm-llvm and data segment initialization */"
+                } else {
+                    ""
+                },
+                if opts.ms_wasm_segment_counting {
+                    "m.segment_new_count += 1;"
+                } else {
+                    ""
+                },
+            )
+        } else {
+            "".into()
+        },
         printed_data = data
             .iter()
-            .map(|d| print_data("m", d))
+            .map(|d| print_data("m", d, opts))
             .collect::<Maybe<Vec<_>>>()?
             .join("\n"),
     );
@@ -2148,6 +2666,35 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
         .join("\n\n");
     generated += "\n";
     dbgprintln!(0, "Generated exports");
+
+    if opts.instruction_counting || opts.memory_op_counting || opts.ms_wasm_segment_counting {
+        generated += "\n";
+        generated += "
+          impl WasmModule {
+             #[allow(dead_code)]
+             fn counting_extension_report(&self) {";
+        if opts.instruction_counting {
+            generated += r#"eprintln!("Instructions executed: {}", self.instruction_count);"#;
+        }
+        if opts.memory_op_counting {
+            generated += r#"eprintln!("Memory loads executed: {}", self.load_count);"#;
+            generated += r#"eprintln!("Memory stores executed: {}", self.store_count);"#;
+        }
+        if opts.instruction_counting && opts.memory_op_counting {
+            generated += r#"eprintln!("Memory operations were {} of all instructions executed",
+                              (self.load_count as f64 + self.store_count as f64) /
+                                 (self.instruction_count as f64)
+                            );"#;
+        }
+        if opts.ms_wasm_segment_counting {
+            generated += r#"eprintln!("New segments allocated: {}", self.segment_new_count);"#;
+            generated += r#"eprintln!("Segments free'd: {}", self.segment_free_count);"#;
+        }
+        generated += "
+             }
+          }";
+        generated += "\n";
+    }
 
     // Generate the `main` function if we are generating a WASI executable
     if opts.generate_wasi_executable {
@@ -2189,8 +2736,17 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
                     "fn main() {{
                          let mut wasm_module = WasmModule::new();
                          wasm_module.{start_func_name}().unwrap();
+                         {counting_extensions}
                      }}",
                     start_func_name = start_func_name,
+                    counting_extensions = if opts.instruction_counting
+                        || opts.memory_op_counting
+                        || opts.ms_wasm_segment_counting
+                    {
+                        "wasm_module.counting_extension_report();"
+                    } else {
+                        ""
+                    },
                 );
                 dbgprintln!(0, "Generated main function for WASI executable");
             }
@@ -2203,6 +2759,14 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
             ));
         }
     }
+
+    let generated = if opts.panic_early_rather_than_trap {
+        generated
+            .replace(")?", ").unwrap()")
+            .replace("ok().unwrap()", "unwrap()")
+    } else {
+        generated
+    };
 
     std::fs::create_dir_all(&opts.output_directory)?;
     print_cargo_toml(opts)?;
