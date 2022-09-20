@@ -1,4 +1,4 @@
-use clap::Clap;
+use clap::Parser;
 
 pub static DEBUG_PRINT_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 macro_rules! dbgprintln {
@@ -26,7 +26,7 @@ const PROGRAM_VERSION: &'static str = env!("CARGO_PKG_VERSION", "expected to be 
 const PROGRAM_AUTHORS: &'static str = env!("CARGO_PKG_AUTHORS", "expected to be built with cargo");
 
 /// A compiler from WebAssembly to safe Rust.
-#[derive(Clap)]
+#[derive(Parser)]
 #[clap(version = PROGRAM_VERSION, author = PROGRAM_AUTHORS)]
 pub struct CmdLineOpts {
     /// Path to the input .wasm file
@@ -41,7 +41,7 @@ pub struct CmdLineOpts {
     #[clap(short, parse(from_occurrences))]
     debug: u8,
     /// Generate a WASI binary
-    #[clap(short = "w", long = "wasi-executable")]
+    #[clap(short = 'w', long = "wasi-executable")]
     generate_wasi_executable: bool,
     /// Make the WASI-linked binary a library instead (implies -w)
     #[clap(long = "wasi-library")]
