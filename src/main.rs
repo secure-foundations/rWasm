@@ -14,6 +14,7 @@ macro_rules! dbg_print_level {
     };
 }
 
+mod cheri;
 mod parser;
 mod printer;
 mod wasm;
@@ -118,6 +119,10 @@ pub struct CmdLineOpts {
     /// library) mode
     #[clap(long)]
     panic_early_rather_than_trap: bool,
+
+    /// Rather than outputting Rust, output Cheri-C
+    #[clap(long)]
+    cheri: bool,
 }
 
 fn main() -> Maybe<()> {
@@ -178,7 +183,11 @@ fn main() -> Maybe<()> {
         &inp,
     )?;
     println!("Finished parsing");
-    printer::print_module(&module, &opts)?;
+    if opts.cheri {
+        cheri::cheri_printer::print_module(&module, &opts)?;
+    } else {
+        printer::print_module(&module, &opts)?;
+    }
 
     println!("Finished");
 

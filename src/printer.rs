@@ -2336,7 +2336,7 @@ debug = true
 }
 
 // returns (mem_size, mem_size_to_vm)
-fn get_memory_backing_size(
+pub fn get_memory_backing_size(
     m: &wasm::syntax::Module,
     opts: &CmdLineOpts,
 ) -> Maybe<(usize, Option<usize>)> {

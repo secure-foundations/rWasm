@@ -34,9 +34,10 @@ pub mod syntax {
                 }
             }
         }
-
+        #[derive(Clone, Debug)]
         pub struct ResultType(pub Vec<ValType>);
 
+        #[derive(Clone, Debug)]
         pub struct FuncType {
             pub from: ResultType,
             pub to: ResultType,
@@ -178,6 +179,52 @@ pub mod syntax {
             I64(i64),
             F32(f32),
             F64(f64),
+        }
+
+        impl Const {
+            // Convert to C const
+            // relies on math.h for NAN and INFINITY values
+            // There is 100% a more clever way to do this
+            pub fn to_c_string(&self) -> String {
+                use std::num::FpCategory::*;
+                use Const::*;
+                match self {
+                    I32(v) => format!("(i32){}", v),
+                    I64(v) => format!("(i64){}", v),
+                    F32(v) => match v.classify() {
+                        Normal | Zero => {
+                            format!("(f32){}{}", v, if v.floor() == *v { ".0" } else { "" })
+                        } // add .0 if it is a whole number
+                        Nan => format!("NANF"),
+                        Infinite => {
+                            if v.is_sign_positive() {
+                                format!("INFINITY")
+                            } else {
+                                format!("-INFINITY")
+                            }
+                        }
+                        Subnormal => {
+                            format!("(f32){}{}", v, if v.floor() == *v { ".0" } else { "" })
+                        }
+                    },
+                    F64(v) => match v.classify() {
+                        Normal | Zero => {
+                            format!("(f64){}{}", v, if v.floor() == *v { ".0" } else { "" })
+                        }
+                        Nan => format!("NAN"),
+                        Infinite => {
+                            if v.is_sign_positive() {
+                                format!("(f64)INFINITY")
+                            } else {
+                                format!("(f64)-INFINITY")
+                            }
+                        }
+                        Subnormal => {
+                            format!("(f64){}{}", v, if v.floor() == *v { ".0" } else { "" })
+                        }
+                    },
+                }
+            }
         }
 
         impl std::fmt::Display for Const {
