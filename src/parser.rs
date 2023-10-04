@@ -857,7 +857,41 @@ generate! { module -> Module = {
 
     let mut custom = vec![];
 
-    // The sections
+    // declare sections
+    let (
+        mut types,  mut imports,    mut functions,  mut tables, 
+        mut mems,   mut globals,    mut exports,    mut start, 
+        mut elem,   mut code,       mut data
+    ) = (
+        vec![], vec![], vec![], vec![], 
+        vec![], vec![], vec![], None, 
+        vec![], vec![], vec![]
+    );
+
+    // parse sections
+    loop {
+        if peek_inp!(@@@length@@@) == 0 {
+            break;
+        }
+        match peek_inp!(..1) {
+            &[0u8] =>    custom.append(&mut run!(customsecs)),
+            &[1u8] =>    types =     run!(typesec),
+            &[2u8] =>    imports =   run!(importsec),
+            &[3u8] =>    functions = run!(funcsec),
+            &[4u8] =>    tables =    run!(tablesec),
+            &[5u8] =>    mems =      run!(memsec),
+            &[6u8] =>    globals =   run!(globalsec),
+            &[7u8] =>    exports =   run!(exportsec),
+            &[8u8] =>    start =     run!(startsec),
+            &[9u8] =>    elem =      run!(elemsec),
+            &[10u8] =>   code =      run!(codesec),
+            &[11u8] =>   data =      run!(datasec),
+            &[b] => err!("Unknown section {:#x}", b),
+            _ => unreachable!(),
+        }
+    }
+
+    /*
     custom.append(&mut run!(customsecs));
     let types = run!(typesec);
     trace!("types {}", types.len());
@@ -892,6 +926,7 @@ generate! { module -> Module = {
     let data = run!(datasec);
     trace!("data {}", data.len());
     custom.append(&mut run!(customsecs));
+     */
 
     let custom: HashMap<String, &[u8]> = custom.into_iter().collect();
 
@@ -899,11 +934,14 @@ generate! { module -> Module = {
         if let Some(data) = custom.get("name") {
             let mut data: &[u8] = data;
             let names = run_manual!(names(data));
-            if data.len() == 0 {
-                names
-            } else {
-                err!("Unused bytes in the custom name section")
-            }
+            names
+
+            // below check seems broken, see https://github.com/secure-foundations/rWasm/issues/2
+            // if data.len() == 0 {
+            //     names
+            // } else {
+            //     err!("Unused bytes in the custom name section")
+            // }
         } else {
             Names {
                 module: None,
@@ -921,9 +959,9 @@ generate! { module -> Module = {
     // per the spec. So why are they kept separated? Anyways, we
     // simply zip them together and wrap them into the `Func` that we
     // need it to be.
-    if funcsec.len() != codesec.len() {
+    if functions.len() != code.len() {
         err!("funcsec and codesec are not the same length -- {} vs {}",
-             funcsec.len(), codesec.len())
+             functions.len(), code.len())
     }
 
     let imported_funcs = imports.iter().filter_map(|i| {
@@ -941,8 +979,8 @@ generate! { module -> Module = {
         }
     }).collect::<Vec<_>>();
 
-    let internal_funcs = funcsec.into_iter()
-        .zip(codesec.into_iter())
+    let internal_funcs = functions.into_iter()
+        .zip(code.into_iter())
         .map(|(typ, (locals, body))| Func {
             typ,
             internals: FuncInternals::LocalFunc { locals, body }
