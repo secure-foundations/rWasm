@@ -18,7 +18,6 @@ type Parsed<'a, T> = crate::Maybe<(&'a [u8], T)>;
         - Use the `run!` macro to run other parsers.
 */
 
-/// Runs a parser function.
 macro_rules! run_parser {
     ($fn:ident ( $inp:ident ) ) => {
         run_parser!($fn($inp,))
@@ -34,7 +33,6 @@ macro_rules! run_parser {
     utils
 */
 
-/// print debug message if debug level >= 3
 macro_rules! trace {
     ($($body:tt)*) => {
         dbgprintln!(3, $($body)*)
@@ -47,8 +45,7 @@ macro_rules! err {
     }}
 }
 
-/// Little Endian Base 128 encoding of unsigned integers. Parses `bits` bits
-/// from `inp` into a `u64`.
+/// Little Endian Base 128 encoding of unsigned ints. Parses `bits` bits into a `u64`.
 fn leb128_u(mut inp: &[u8], bits: usize) -> Parsed<u64> {
     let n = inp[0] as u64;
     inp = &inp[1..];
@@ -65,8 +62,7 @@ fn leb128_u(mut inp: &[u8], bits: usize) -> Parsed<u64> {
     }
 }
 
-/// Little Endian Base 128 encoding of signed integers. Parses `bits` bits
-/// from `inp` into a `i64`.
+/// Little Endian Base 128 encoding of signed ints. Parses `bits` bits into a `i64`.
 fn leb128_s(mut inp: &[u8], bits: usize) -> Parsed<i64> {
     let n = inp[0] as u64;
     inp = &inp[1..];
@@ -109,35 +105,9 @@ mod test_leb128 {
 */
 
 /// This is a hack to allow for macros generating new macro definitions making use of
-/// repetition arguments, which seems to be a limitation of Rust. We cannot write:
-/// ```ignore
-/// macro_rules! foo { 
-///     () => {
-///         macro_rules! bar {
-///             ( $($any:tt),* ) => { $($any),* };
-///         }
-///     }; 
-/// }
-/// ```
-/// If we used metavariables (on nightly) we could escape the `$`s in the inner macro
-/// by replacing them with `$$`. Alternatively, we can use this macro, which takes a
-/// macro matching and calls it with `$` as its argument. This allows us to write:
-/// ```ignore
-/// macro_rules! foo {
-///     () => {
-///         with_dollar_sign! {
-///             ($d:tt) => {
-///                 macro_rules! bar {
-///                     ($d($d any:tt)*) => { $d($d any),* };
-///                 }
-///             }
-///         }
-///     };
-/// }
-/// ```
-/// so `$d` in the inner macro will be replaced by `$` and we obtain the desired
-/// behavior. IMO this is extremely ugly.
-/// See https://github.com/rust-lang/rust/issues/35853#issuecomment-415993963
+/// repetition arguments, see
+/// https://github.com/rust-lang/rust/issues/35853#issuecomment-415993963
+/// An alternative would be to use macro metavariables on nightly.
 macro_rules! with_dollar_sign {
     ($($body:tt)*) => {
         macro_rules! __with_dollar_sign { $($body)* }
@@ -145,14 +115,20 @@ macro_rules! with_dollar_sign {
     }
 }
 
-/// Generate a parser function with the given name, parsing the given return type 
-/// `T` from a byte array, into a `Parsed<T>`.
+/// Generate a parser function. Example:
 /// ```ignore
-/// generate! { fname (arg1:a1, arg2:a2) -> type = body }
+/// generate! { double_peek (n:u32) -> &[u8] = run!(peek(2*n))}
 /// ```
 /// expands to
 /// ```ignore
-/// fn fname(mut inp: &[u8], arg1:a1, arg2:a2) -> Parsed<type> {...}
+/// fn double_peek(mut inp: &[u8], n:u32) -> Parsed<type> {
+///     let v = {
+///         let (inp1, v) = peek(inp, 2*n)?;
+///         inp = inp1;
+///         v
+///     };
+///     Ok((inp, v))
+/// }
 /// ```
 macro_rules! generate {
     ($id:ident -> $ty:ty = $body:expr) => {
@@ -190,7 +166,7 @@ macro_rules! generate {
                                 Ok((inp1, v)) => {
                                     inp = inp1;
                                     Ok(v)
-                                }
+                                },
                                 Err(e) => Err(e),
                             }
                         }};
