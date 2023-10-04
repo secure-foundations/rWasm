@@ -6,12 +6,43 @@ use std::convert::TryInto;
 
 type Parsed<'a, T> = crate::Maybe<(&'a [u8], T)>;
 
+/// print debug message if debug level >= 3
 macro_rules! trace {
     ($($body:tt)*) => {
         dbgprintln!(3, $($body)*)
     };
 }
 
+/// This is a hack to allow for macros generating new macro definitions making use of
+/// repetition arguments, which seems to be a limitation of Rust. We cannot write:
+/// ```ignore
+/// macro_rules! foo { 
+///     () => {
+///         macro_rules! bar {
+///             ( $($any:tt),* ) => { $($any),* };
+///         }
+///     }; 
+/// }
+/// ```
+/// If we used metavariables (on nightly) we could escape the `$`s in the inner macro
+/// by replacing them with `$$`. Alternatively, we can use this macro, which takes a
+/// macro matching and calls it with `$` as its argument. This allows us to write:
+/// ```ignore
+/// macro_rules! foo {
+///     () => {
+///         with_dollar_sign! {
+///             ($d:tt) => {
+///                 macro_rules! bar {
+///                     ($d($d any:tt)*) => { $d($d any),* };
+///                 }
+///             }
+///         }
+///     };
+/// }
+/// ```
+/// so `$d` in the inner macro will be replaced by `$` and we obtain the desired
+/// behavior. IMO this is extremely ugly.
+/// See https://github.com/rust-lang/rust/issues/35853#issuecomment-415993963
 macro_rules! with_dollar_sign {
     ($($body:tt)*) => {
         macro_rules! __with_dollar_sign { $($body)* }
@@ -19,6 +50,15 @@ macro_rules! with_dollar_sign {
     }
 }
 
+/// Generate a parser function with the given name, parsing the given return type 
+/// `T` from a byte array, into a `Parsed<T>`.
+/// ```ignore
+/// generate! { fname (arg1:a1, arg2:a2) -> type = body }
+/// ```
+/// expands to
+/// ```ignore
+/// fn fname(mut inp: &[u8], arg1:a1, arg2:a2) -> Parsed<type> {...}
+/// ```
 macro_rules! generate {
     ($id:ident -> $ty:ty = $body:expr) => {
         generate!{$id() -> $ty = $body}
@@ -28,6 +68,9 @@ macro_rules! generate {
         fn $id(mut inp: &[u8], $($fnarg : $fntyp,)*) -> Parsed<$ty> {
             with_dollar_sign! {
                 ($d:tt) => {
+                    /// Calls a function returning two things `(inp1, v)`
+                    /// with inp and the given arguments.
+                    /// Updates inp to `inp1` and returns `v`.
                     #[allow(unused_macros)]
                     macro_rules! run {
                         ($fn:ident) => { run!($fn()) };
@@ -43,6 +86,8 @@ macro_rules! generate {
 
             with_dollar_sign! {
                 ($d:tt) => {
+                    /// Similar to `run!`, but doesn't expect successful parsing.
+                    /// Returns a `Result<Parsed<T>, E>` instead of `Parsed<T>`.
                     #[allow(unused_macros)]
                     macro_rules! try_run {
                         ($fn:ident) => { try_run!($fn()) };
@@ -59,6 +104,7 @@ macro_rules! generate {
                 }
             }
 
+            /// Print remaining input to debug.
             #[allow(unused_macros)]
             macro_rules! dump {
                 () => {{
@@ -79,6 +125,7 @@ macro_rules! generate {
                 }};
             }
 
+            /// Removes the given number of bytes from the input and returns them.
             #[allow(unused_macros)]
             macro_rules! inp {
                 (..$end:expr) => {{
@@ -94,12 +141,26 @@ macro_rules! generate {
     };
 }
 
+/// Return an error with the given message.
 macro_rules! err {
     ($($args:expr),*) => {{
         return Err(eyre!($($args,)*));
     }}
 }
 
+/// Calls the function as given, updates the input with the first
+/// result and returns the second result. For example:
+/// ```ignore
+/// run_manual!(leb128_u(inp, 32))
+/// ```
+/// expands to
+/// ```ignore
+/// {
+///     let (inp1, v) = leb128_u(inp, 32)?;
+///     inp = inp1;
+///     v
+/// }
+/// ```
 macro_rules! run_manual {
     ($fn:ident ( $inp:ident, $($arg:expr),* ) ) => {{
         let (inp1, v) = $fn( $inp, $($arg,)*)?;
@@ -113,6 +174,8 @@ macro_rules! run_manual {
     }};
 }
 
+/// Little Endian Base 128 encoding of unsigned integers. Parses `bits` bits
+/// from `inp` into a `u64`.
 fn leb128_u(mut inp: &[u8], bits: usize) -> Parsed<u64> {
     let n = inp[0] as u64;
     inp = &inp[1..];
@@ -129,6 +192,8 @@ fn leb128_u(mut inp: &[u8], bits: usize) -> Parsed<u64> {
     }
 }
 
+/// Little Endian Base 128 encoding of signed integers. Parses `bits` bits
+/// from `inp` into a `i64`.
 fn leb128_s(mut inp: &[u8], bits: usize) -> Parsed<i64> {
     let n = inp[0] as u64;
     inp = &inp[1..];
@@ -750,7 +815,18 @@ generate! { names -> Names = {
         functions: HashMap::new(),
         locals: HashMap::new(),
     };
-    let name_type = run!(u32); // module = 0, function = 1, local = 2
+
+    /*
+        As per the 1.0 spec, the type field is only one byte, so I think run!(u32) is 
+        technically wrong here. It should always work because the type can only be
+        0, 1, or 2, and since integers are leb encoded, reading the first 32 bit int
+        will only read the first byte. Still, I think it's confusing, we should only
+        read one byte.
+    */
+
+    // let name_type = run!(u32); // module = 0, function = 1, local = 2
+    let name_type = run!(byte) as u32;
+
     if name_type != 1 {
         // We don't support non-function names just yet. Might add it
         // in the future.
@@ -758,9 +834,9 @@ generate! { names -> Names = {
     }
     let subsection_size = run!(u32);
     if subsection_size > 0 {
-        let mut inp = inp![..subsection_size as usize];
-        names.functions = run_manual!(vec(inp, function_name)).into_iter().collect();
-        if inp.len() != 0 {
+        let mut inp_ = inp![..subsection_size as usize];
+        names.functions = run_manual!(vec(inp_, function_name)).into_iter().collect();
+        if inp_.len() != 0 {
             err!("Unused bytes in custom name section")
         }
     }
