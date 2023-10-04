@@ -6,6 +6,34 @@ use std::convert::TryInto;
 
 type Parsed<'a, T> = crate::Maybe<(&'a [u8], T)>;
 
+/*
+    There are two ways to write a parser:
+    a)
+        - Write a function that takes a byte array and returns a `Parsed<T>`.
+        - Use the `run_parser!` macro to run other parsers.
+    b)
+        - For simple parsers, use the `generate!` macro.
+        - Define a function body that returns the parsed type, and the macro will
+          generate a parser function.
+        - Use the `run!` macro to run other parsers.
+*/
+
+/// Runs a parser function.
+macro_rules! run_parser {
+    ($fn:ident ( $inp:ident ) ) => {
+        run_parser!($fn($inp,))
+    };
+    ($fn:ident ( $inp:ident, $($arg:expr),* ) ) => {{
+        let (inp1, v) = $fn( $inp, $($arg,)*)?;
+        $inp = inp1;
+        v
+    }};
+}
+
+/*
+    utils
+*/
+
 /// print debug message if debug level >= 3
 macro_rules! trace {
     ($($body:tt)*) => {
@@ -13,165 +41,10 @@ macro_rules! trace {
     };
 }
 
-/// This is a hack to allow for macros generating new macro definitions making use of
-/// repetition arguments, which seems to be a limitation of Rust. We cannot write:
-/// ```ignore
-/// macro_rules! foo { 
-///     () => {
-///         macro_rules! bar {
-///             ( $($any:tt),* ) => { $($any),* };
-///         }
-///     }; 
-/// }
-/// ```
-/// If we used metavariables (on nightly) we could escape the `$`s in the inner macro
-/// by replacing them with `$$`. Alternatively, we can use this macro, which takes a
-/// macro matching and calls it with `$` as its argument. This allows us to write:
-/// ```ignore
-/// macro_rules! foo {
-///     () => {
-///         with_dollar_sign! {
-///             ($d:tt) => {
-///                 macro_rules! bar {
-///                     ($d($d any:tt)*) => { $d($d any),* };
-///                 }
-///             }
-///         }
-///     };
-/// }
-/// ```
-/// so `$d` in the inner macro will be replaced by `$` and we obtain the desired
-/// behavior. IMO this is extremely ugly.
-/// See https://github.com/rust-lang/rust/issues/35853#issuecomment-415993963
-macro_rules! with_dollar_sign {
-    ($($body:tt)*) => {
-        macro_rules! __with_dollar_sign { $($body)* }
-        __with_dollar_sign!($);
-    }
-}
-
-/// Generate a parser function with the given name, parsing the given return type 
-/// `T` from a byte array, into a `Parsed<T>`.
-/// ```ignore
-/// generate! { fname (arg1:a1, arg2:a2) -> type = body }
-/// ```
-/// expands to
-/// ```ignore
-/// fn fname(mut inp: &[u8], arg1:a1, arg2:a2) -> Parsed<type> {...}
-/// ```
-macro_rules! generate {
-    ($id:ident -> $ty:ty = $body:expr) => {
-        generate!{$id() -> $ty = $body}
-    };
-
-    ($id:ident($($fnarg:ident : $fntyp:ty),*) -> $ty:ty = $body: expr ) => {
-        fn $id(mut inp: &[u8], $($fnarg : $fntyp,)*) -> Parsed<$ty> {
-            with_dollar_sign! {
-                ($d:tt) => {
-                    /// Calls a function returning two things `(inp1, v)`
-                    /// with inp and the given arguments.
-                    /// Updates inp to `inp1` and returns `v`.
-                    #[allow(unused_macros)]
-                    macro_rules! run {
-                        ($fn:ident) => { run!($fn()) };
-                        ($fn:ident ($d($arg:expr),* ) ) => {{
-                            let (inp1, v) = $fn( inp, $d($arg,)*)?;
-                            inp = inp1;
-                            v
-                        }};
-                    }
-                }
-            }
-
-
-            with_dollar_sign! {
-                ($d:tt) => {
-                    /// Similar to `run!`, but doesn't expect successful parsing.
-                    /// Returns a `Result<Parsed<T>, E>` instead of `Parsed<T>`.
-                    #[allow(unused_macros)]
-                    macro_rules! try_run {
-                        ($fn:ident) => { try_run!($fn()) };
-                        ($fn:ident ($d($arg:expr),* ) ) => {{
-                            match $fn( inp, $d($arg,)*) {
-                                Ok((inp1, v)) => {
-                                    inp = inp1;
-                                    Ok(v)
-                                }
-                                Err(e) => Err(e),
-                            }
-                        }};
-                    }
-                }
-            }
-
-            /// Print remaining input to debug.
-            #[allow(unused_macros)]
-            macro_rules! dump {
-                () => {{
-                    trace!("Remaining: {:#x?}", inp)
-                }}
-            }
-
-            #[allow(unused_macros)]
-            macro_rules! peek_inp {
-                (@@@length@@@) => {{
-                    inp.len()
-                }};
-                (..$end:expr) => {{
-                    inp.get(..$end).ok_or(eyre!("Insufficient data for parsing"))?
-                }};
-                ($pos:expr) => {{
-                    inp.get($pos).ok_or(eyre!("Insufficient data for parsing"))?
-                }};
-            }
-
-            /// Removes the given number of bytes from the input and returns them.
-            #[allow(unused_macros)]
-            macro_rules! inp {
-                (..$end:expr) => {{
-                    let e = peek_inp!(..$end);
-                    inp = &inp[$end..];
-                    e
-                }};
-            }
-
-            let v = $body;
-            Ok((inp, v))
-        }
-    };
-}
-
-/// Return an error with the given message.
 macro_rules! err {
     ($($args:expr),*) => {{
         return Err(eyre!($($args,)*));
     }}
-}
-
-/// Calls the function as given, updates the input with the first
-/// result and returns the second result. For example:
-/// ```ignore
-/// run_manual!(leb128_u(inp, 32))
-/// ```
-/// expands to
-/// ```ignore
-/// {
-///     let (inp1, v) = leb128_u(inp, 32)?;
-///     inp = inp1;
-///     v
-/// }
-/// ```
-macro_rules! run_manual {
-    ($fn:ident ( $inp:ident, $($arg:expr),* ) ) => {{
-        let (inp1, v) = $fn( $inp, $($arg,)*)?;
-        $inp = inp1;
-        v
-    }};
-    ($fn:ident ( $inp:ident ) ) => {{
-        let (inp1, v) = $fn( $inp )?;
-        $inp = inp1;
-        v
-    }};
 }
 
 /// Little Endian Base 128 encoding of unsigned integers. Parses `bits` bits
@@ -231,11 +104,139 @@ mod test_leb128 {
     }
 }
 
+/*
+    parser generator
+*/
+
+/// This is a hack to allow for macros generating new macro definitions making use of
+/// repetition arguments, which seems to be a limitation of Rust. We cannot write:
+/// ```ignore
+/// macro_rules! foo { 
+///     () => {
+///         macro_rules! bar {
+///             ( $($any:tt),* ) => { $($any),* };
+///         }
+///     }; 
+/// }
+/// ```
+/// If we used metavariables (on nightly) we could escape the `$`s in the inner macro
+/// by replacing them with `$$`. Alternatively, we can use this macro, which takes a
+/// macro matching and calls it with `$` as its argument. This allows us to write:
+/// ```ignore
+/// macro_rules! foo {
+///     () => {
+///         with_dollar_sign! {
+///             ($d:tt) => {
+///                 macro_rules! bar {
+///                     ($d($d any:tt)*) => { $d($d any),* };
+///                 }
+///             }
+///         }
+///     };
+/// }
+/// ```
+/// so `$d` in the inner macro will be replaced by `$` and we obtain the desired
+/// behavior. IMO this is extremely ugly.
+/// See https://github.com/rust-lang/rust/issues/35853#issuecomment-415993963
+macro_rules! with_dollar_sign {
+    ($($body:tt)*) => {
+        macro_rules! __with_dollar_sign { $($body)* }
+        __with_dollar_sign!($);
+    }
+}
+
+/// Generate a parser function with the given name, parsing the given return type 
+/// `T` from a byte array, into a `Parsed<T>`.
+/// ```ignore
+/// generate! { fname (arg1:a1, arg2:a2) -> type = body }
+/// ```
+/// expands to
+/// ```ignore
+/// fn fname(mut inp: &[u8], arg1:a1, arg2:a2) -> Parsed<type> {...}
+/// ```
+macro_rules! generate {
+    ($id:ident -> $ty:ty = $body:expr) => {
+        generate!{$id() -> $ty = $body}
+    };
+
+    ($id:ident($($fnarg:ident : $fntyp:ty),*) -> $ty:ty = $body: expr ) => {
+        fn $id(mut inp: &[u8], $($fnarg : $fntyp,)*) -> Parsed<$ty> {
+
+            with_dollar_sign! {
+                ($d:tt) => {
+                    /// Runs a parser.
+                    #[allow(unused_macros)]
+                    macro_rules! run {
+                        ($fn:ident) => { run!($fn()) };
+                        ($fn:ident ($d($arg:expr),* ) ) => {{
+                            let (inp1, v) = $fn( inp, $d($arg,)*)?;
+                            inp = inp1;
+                            v
+                        }};
+                    }
+                }
+            }
+
+
+            with_dollar_sign! {
+                ($d:tt) => {
+                    /// Similar to `run!`, but doesn't expect successful parsing.
+                    /// Returns a `Result<Parsed<T>, E>` instead of `Parsed<T>`.
+                    #[allow(unused_macros)]
+                    macro_rules! try_run {
+                        ($fn:ident) => { try_run!($fn()) };
+                        ($fn:ident ($d($arg:expr),* ) ) => {{
+                            match $fn( inp, $d($arg,)*) {
+                                Ok((inp1, v)) => {
+                                    inp = inp1;
+                                    Ok(v)
+                                }
+                                Err(e) => Err(e),
+                            }
+                        }};
+                    }
+                }
+            }
+
+            let v = $body;
+            Ok((inp, v))
+        }
+    };
+}
+
+/*
+    Parsers
+*/
+
+fn peek(inp: &[u8], n: usize) -> Parsed<&[u8]> {
+    let v = inp.get(..n).ok_or(eyre!("Insufficient data for parsing"))?;
+    Ok((inp, v))
+}
+
+fn peek_at(inp: &[u8], pos: usize) -> Parsed<&u8> {
+    let v = inp.get(pos).ok_or(eyre!("Insufficient data for parsing"))?;
+    Ok((inp, v))
+}
+
+fn length(inp: &[u8]) -> Parsed<usize> {
+    Ok((inp, inp.len()))
+}
+
+fn inp(inp: &[u8], n: usize) -> Parsed<&[u8]> {
+    let v = inp.get(..n).ok_or(eyre!("Insufficient data for parsing"))?;
+    Ok((&inp[n..], v))
+}
+
+fn inp_dump(inp: &[u8]) -> Parsed<()> {
+    trace!("Remaining: {:#x?}", inp);
+    Ok((inp, ()))
+}
+
 generate! {u32 -> u32 = run!(leb128_u(32)) as u32}
 generate! {i32 -> i32 = run!(leb128_s(32)) as i32}
 generate! {i64 -> i64 = run!(leb128_s(64)) as i64}
-generate! {f32 -> f32 = f32::from_le_bytes(inp![..4].try_into()?)}
-generate! {f64 -> f64 = f64::from_le_bytes(inp![..8].try_into()?)}
+generate! {f32 -> f32 = f32::from_le_bytes(run!(inp(4)).try_into()?)}
+generate! {f64 -> f64 = f64::from_le_bytes(run!(inp(8)).try_into()?)}
 
 generate! {s33 -> i64 = run!(leb128_s(33))}
 
@@ -243,15 +244,15 @@ fn vec<T, F>(mut inp: &[u8], elem: F) -> Parsed<Vec<T>>
 where
     F: Fn(&[u8]) -> Parsed<T>,
 {
-    let len = run_manual!(u32(inp));
+    let len = run_parser!(u32(inp));
 
     let l = (0..len)
-        .map(|_| Ok(run_manual!(elem(inp))))
+        .map(|_| Ok(run_parser!(elem(inp))))
         .collect::<Maybe<Vec<T>>>()?;
     Ok((inp, l))
 }
 
-generate! {byte -> u8 = inp![..1][0]}
+generate! {byte -> u8 = run!(inp(1))[0]}
 
 generate! {name -> String = String::from_utf8(run!(vec(byte)))?}
 
@@ -338,7 +339,7 @@ where
     let mut res = vec![];
 
     while !until.contains(&v) {
-        res.push(run_manual!(elem(inp)));
+        res.push(run_parser!(elem(inp)));
         v = inp[0];
     }
     inp = &inp[1..];
@@ -641,13 +642,13 @@ generate! { memarg -> MemArg = {
 
 generate! { expr -> Expr = Expr(run!(vec_until(instr, 0x0b))) }
 
-generate! { typeidx -> TypeIdx = TypeIdx(run!(u32)) }
-generate! { funcidx -> FuncIdx = FuncIdx(run!(u32)) }
-generate! { tableidx -> TableIdx = TableIdx(run!(u32)) }
-generate! { memidx -> MemIdx = MemIdx(run!(u32)) }
+generate! { typeidx   -> TypeIdx   = TypeIdx(run!(u32))  }
+generate! { funcidx   -> FuncIdx   = FuncIdx(run!(u32))  }
+generate! { tableidx  -> TableIdx  = TableIdx(run!(u32)) }
+generate! { memidx    -> MemIdx    = MemIdx(run!(u32))   }
 generate! { globalidx -> GlobalIdx = GlobalIdx(run!(u32)) }
-generate! { localidx -> LocalIdx = LocalIdx(run!(u32)) }
-generate! { labelidx -> LabelIdx = LabelIdx(run!(u32)) }
+generate! { localidx  -> LocalIdx  = LocalIdx(run!(u32)) }
+generate! { labelidx  -> LabelIdx  = LabelIdx(run!(u32)) }
 
 macro_rules! section {
     ($n:literal, $name:ident -> Option<$ty:ty> = $body:expr) => {
@@ -675,7 +676,7 @@ macro_rules! section {
                 err!("Insufficient bytes for section {}", $n)
             }
             let mut inp_inner = &inp[..size];
-            let v = run_manual!(aux(inp_inner));
+            let v = run_parser!(aux(inp_inner));
             if inp_inner.len() != 0 {
                 err!(
                     "Unexpected {} bytes remain for section {:#x}",
@@ -691,13 +692,13 @@ macro_rules! section {
 generate! { customsec -> (String, &[u8]) = {
     run!(expect_byte(0));
     let size = run!(u32) as usize;
-    let mut inp = inp![..size];
-    let name = run_manual!(name(inp));
+    let mut inp = run!(inp(size));
+    let name = run_parser!(name(inp));
     (name, inp)
 }}
 generate! { customsecs -> Vec<(String, &[u8])> = {
     let mut ret = vec![];
-    while peek_inp!(@@@length@@@) != 0 && peek_inp![..1][0] == 0 {
+    while run!(length) != 0 && run!(peek(1))[0] == 0 {
         ret.push(run!(customsec));
     }
     ret
@@ -754,7 +755,7 @@ generate! { exportdesc -> ExportDesc = {
 }}
 
 section! { 8, startsec -> Option<Start> = {
-    if peek_inp!(@@@length@@@) == 0 {
+    if run!(length) == 0 {
         None
     } else {
         Some(run!(start))
@@ -834,8 +835,8 @@ generate! { names -> Names = {
     }
     let subsection_size = run!(u32);
     if subsection_size > 0 {
-        let mut inp_ = inp![..subsection_size as usize];
-        names.functions = run_manual!(vec(inp_, function_name)).into_iter().collect();
+        let mut inp_ = run!(inp(subsection_size as usize));
+        names.functions = run_parser!(vec(inp_, function_name)).into_iter().collect();
         if inp_.len() != 0 {
             err!("Unused bytes in custom name section")
         }
@@ -870,10 +871,10 @@ generate! { module -> Module = {
 
     // parse sections
     loop {
-        if peek_inp!(@@@length@@@) == 0 {
+        if run!(length) == 0 {
             break;
         }
-        match peek_inp!(..1) {
+        match run!(peek(1)) {
             &[0u8] =>    custom.append(&mut run!(customsecs)),
             &[1u8] =>    types =     run!(typesec),
             &[2u8] =>    imports =   run!(importsec),
@@ -891,49 +892,12 @@ generate! { module -> Module = {
         }
     }
 
-    /*
-    custom.append(&mut run!(customsecs));
-    let types = run!(typesec);
-    trace!("types {}", types.len());
-    custom.append(&mut run!(customsecs));
-    let imports = run!(importsec);
-    trace!("imports {}", imports.len());
-    custom.append(&mut run!(customsecs));
-    let funcsec = run!(funcsec);
-    trace!("funcsec {}", funcsec.len());
-    custom.append(&mut run!(customsecs));
-    let tables = run!(tablesec);
-    trace!("tables {}", tables.len());
-    custom.append(&mut run!(customsecs));
-    let mems = run!(memsec);
-    trace!("mems {}", mems.len());
-    custom.append(&mut run!(customsecs));
-    let globals = run!(globalsec);
-    trace!("globals {}", globals.len());
-    custom.append(&mut run!(customsecs));
-    let exports = run!(exportsec);
-    trace!("exports {}", exports.len());
-    custom.append(&mut run!(customsecs));
-    let start = run!(startsec);
-    trace!("start {}", start.is_some());
-    custom.append(&mut run!(customsecs));
-    let elem = run!(elemsec);
-    trace!("elem {}", elem.len());
-    custom.append(&mut run!(customsecs));
-    let codesec = run!(codesec);
-    trace!("codesec {}", codesec.len());
-    custom.append(&mut run!(customsecs));
-    let data = run!(datasec);
-    trace!("data {}", data.len());
-    custom.append(&mut run!(customsecs));
-     */
-
     let custom: HashMap<String, &[u8]> = custom.into_iter().collect();
 
     let names = {
         if let Some(data) = custom.get("name") {
             let mut data: &[u8] = data;
-            let names = run_manual!(names(data));
+            let names = run_parser!(names(data));
             names
 
             // below check seems broken, see https://github.com/secure-foundations/rWasm/issues/2
