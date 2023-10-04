@@ -121,7 +121,7 @@ macro_rules! with_dollar_sign {
 /// ```
 /// expands to
 /// ```ignore
-/// fn double_peek(mut inp: &[u8], n:u32) -> Parsed<type> {
+/// fn double_peek(mut inp: &[u8], n:u32) -> Parsed<&[u32]> {
 ///     let v = {
 ///         let (inp1, v) = peek(inp, 2*n)?;
 ///         inp = inp1;
