@@ -829,6 +829,7 @@ generate! { module -> Module = {
             // } else {
             //     err!("Unused bytes in the custom name section")
             // }
+            names
         } else {
             Names {
                 module: None,
