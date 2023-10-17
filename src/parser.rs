@@ -873,7 +873,7 @@ generate! { module -> Module = {
     let names = {
         if let Some(data) = custom.get("name") {
             let mut data: &[u8] = data;
-            let names = run_manual!(names(data));
+            let names = run_parser!(names(data));
             // below check seems broken, see https://github.com/secure-foundations/rWasm/issues/2
             // if data.len() == 0 {
             //     names
