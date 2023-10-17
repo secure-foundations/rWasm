@@ -874,14 +874,11 @@ generate! { module -> Module = {
         if let Some(data) = custom.get("name") {
             let mut data: &[u8] = data;
             let names = run_parser!(names(data));
-            names
-
-            // below check seems broken, see https://github.com/secure-foundations/rWasm/issues/2
-            // if data.len() == 0 {
-            //     names
-            // } else {
-            //     err!("Unused bytes in the custom name section")
-            // }
+            if data.len() == 0 {
+                names
+            } else {
+                err!("Unused bytes in the custom name section")
+            }
         } else {
             Names {
                 module: None,
