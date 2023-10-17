@@ -81,6 +81,11 @@ pub struct CmdLineOpts {
     /// Generate a `no_std` library, limiting usage to `core` and `alloc`
     #[clap(long)]
     no_std_library: bool,
+    /// Generate statically allocated, heapless code (implies --no-std-library,
+    /// requires --fixed-mem-size)
+    /// (Warning: experimental performance impact)
+    #[clap(long)]
+    no_alloc: bool,
 }
 
 fn main() -> Maybe<()> {
@@ -105,6 +110,12 @@ fn main() -> Maybe<()> {
     }
     if opts.generate_as_wasi_library {
         opts.generate_wasi_executable = true;
+    }
+    if opts.no_alloc {
+        if opts.fixed_mem_size.is_none() {
+            return Err(eyre!("Must use --fixed-mem-size when using --no-alloc"));
+        }
+        opts.no_std_library = true;
     }
 
     let inp = std::fs::read(&opts.input_path)?;

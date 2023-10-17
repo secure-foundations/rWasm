@@ -541,7 +541,7 @@ fn print_instr(
             let dynamic_offset = pop!(i32);
             let dst = push!();
             let ea = format!("({} + {})", dynamic_offset, mem.memarg.offset);
-            let self_mem = if opts.fixed_mem_size.is_some() {
+            let self_mem = if opts.fixed_mem_size.is_some() && !opts.no_alloc {
                 "*self.memory"
             } else {
                 "self.memory"
@@ -615,7 +615,7 @@ fn print_instr(
             } else {
                 "".into()
             };
-            let self_mem = if opts.fixed_mem_size.is_some() {
+            let self_mem = if opts.fixed_mem_size.is_some() && !opts.no_alloc {
                 "*self.memory"
             } else {
                 "self.memory"
@@ -1357,7 +1357,7 @@ fn print_function(
                         // the whole process to exit at this point.
                         result += "std::process::exit(arg_0)";
                     } else {
-                        let self_mem = if opts.fixed_mem_size.is_some() {
+                        let self_mem = if opts.fixed_mem_size.is_some() && !opts.no_alloc {
                             "*self.memory"
                         } else {
                             "self.memory"
@@ -1412,7 +1412,11 @@ fn print_global_initializer(g: &wasm::syntax::Global) -> Maybe<String> {
     }
 }
 
-fn print_elem(self_name: &str, e: &wasm::syntax::Elem) -> Maybe<String> {
+fn print_elem(
+    self_name: &str, 
+    e: &wasm::syntax::Elem,
+    opts: &CmdLineOpts,
+) -> Maybe<String> {
     if e.table.0 != 0 {
         return Err(eyre!("Current version of WASM supports only 1 table"))?;
     }
@@ -1427,13 +1431,17 @@ fn print_elem(self_name: &str, e: &wasm::syntax::Elem) -> Maybe<String> {
                 return Err(eyre!("Invalid floating offset"))?;
             }
         };
-        let setup = format!(
-            "if {}.indirect_call_table.len() < {} {{ {}.indirect_call_table.resize({}, None) }}",
-            self_name,
-            offset + e.init.len(),
-            self_name,
-            offset + e.init.len(),
-        );
+        let setup = if !opts.no_alloc {
+            format!(
+                "if {}.indirect_call_table.len() < {} {{ {}.indirect_call_table.resize({}, None) }}",
+                self_name,
+                offset + e.init.len(),
+                self_name,
+                offset + e.init.len(),
+            )
+        } else {
+            "".into()
+        };
         let insertions = e
             .init
             .iter()
@@ -1603,7 +1611,7 @@ fn print_inline_indirect_call(
     ))
 }
 
-fn print_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<String> {
+fn print_indirect_call_dispatch(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<String> {
     let targets = m
         .funcs
         .iter()
@@ -1629,7 +1637,8 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<String> {
                 .map(|(i, _t)| format!("a{}", i))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let rets = match typ.to.0.len() {
+            let num_rets = typ.to.0.len();
+            let rets = match num_rets {
                 0 => "".into(),
                 1 => "TaggedVal::from(rets)".into(),
                 _ => typ
@@ -1646,6 +1655,11 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<String> {
             } else {
                 "let rets = "
             };
+            let ret = if !opts.no_alloc {
+                format!("vec![{}]", rets)
+            } else {
+                format!("IndirectFuncRet::Ret{}([{}])", num_rets, rets)
+            };
             Ok(format!(
                 "{} => {{
                          if args.len() != {} {{
@@ -1653,7 +1667,7 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<String> {
                          }}
                          {}
                          {}self.func_{}({})?;
-                         Some(vec![{}])
+                         Some({})
                      }}",
                 i,
                 typ.from.0.len(),
@@ -1661,7 +1675,7 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<String> {
                 store_rets,
                 i,
                 args,
-                rets,
+                ret,
             ))
         })
         .collect::<Maybe<Vec<_>>>()?
@@ -1670,7 +1684,7 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<String> {
         "impl WasmModule {{
              #[allow(dead_code)]
              fn indirect_call(&mut self, idx: usize, args: &[TaggedVal]) ->
-                     Option<Vec<TaggedVal>> {{
+                     Option<{}> {{
                  let call_target = (*self.indirect_call_table.get(idx)?)?;
                  match call_target {{
                      {}
@@ -1678,6 +1692,10 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<String> {
                  }}
              }}
          }}",
+        {
+            if !opts.no_alloc { "Vec<TaggedVal>"  }
+            else              { "IndirectFuncRet" }
+        },
         targets
     ))
 }
@@ -1898,11 +1916,14 @@ edition = "2018"
 
 [profile.release]
 debug = true
+{panic}
             "#,
             name = package_name,
             version = crate::PROGRAM_VERSION,
             generator = crate::PROGRAM_NAME,
             dependencies = dependencies,
+            panic = if opts.no_alloc { "panic = \"abort\"" } 
+            else { "" },
         ),
     )?)
 }
@@ -1922,7 +1943,7 @@ fn get_memory_backing_size(
             if size < m {
                 return Err(eyre!("Module requires at least {} blocks of memory", m));
             }
-        } else {
+        } else if size != 0 {
             return Err(eyre!("Module does not use any memory"));
         }
         if let Some(m) = max_allowed_blocks {
@@ -1963,21 +1984,98 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
     } else {
         ""
     };
+    let panic_handler = if !opts.no_alloc {
+        "".into()
+    } else {
+        format!("
+            #[panic_handler]
+            fn panic(_info: &PanicInfo) -> ! {{
+                loop {{}}
+            }}")
+    };
+    // If we need to avoid alloc dependency, we need to generate
+    // arrays for the return values of functions (can't use `Vec`).
+    let static_function_return_def = if opts.no_alloc {
+        // Find the maximum number of return values of all functions
+        let max_rets = m
+            .funcs
+            .iter()
+            .map(|f| {
+                let ftyp = m.types.get(f.typ.0 as usize).ok_or(
+                    eyre!("Invalid type index {} for function", f.typ.0),
+                )?;
+                Ok(ftyp.to.0.len())
+            })
+            .collect::<Maybe<Vec<_>>>()?
+            .into_iter()
+            .max().unwrap_or(0);
+        let template = include_str!("../templates-for-generation/static_func_returns.rs");
+        template.replace(
+            "<<RETDEFS>>", 
+            &(0..=max_rets)
+                .map(|i| format!("Ret{}([TaggedVal; {}])", i, i))
+                .collect::<Vec<_>>()
+                .join(",\n")
+        )
+        .replace(
+            "<<RETCOUNTS>>",
+            &(0..=max_rets)
+                .map(|i| format!("Ret{}(_) => {}", i, i))
+                .collect::<Vec<_>>()
+                .join(",\n")
+        )
+        .replace(
+            "<<RETINDEXES>>",
+            &(0..=max_rets)
+                .map(|i| format!("Ret{}(v) => &v[i]", i))
+                .collect::<Vec<_>>()
+                .join(",\n")
+        )
+        .replace(
+            "<<RETINDEXESMUT>>",
+            &(0..=max_rets)
+                .map(|i| format!("Ret{}(v) => &mut v[i]", i))
+                .collect::<Vec<_>>()
+                .join(",\n")
+        )
+    } else {
+        // Otherwise, we can use `Vec` for the return values of functions
+        "".into()
+    };
     let wasm_module = format!(
         "#[allow(dead_code)]
          pub struct WasmModule {{
             {memory},
-            globals: Vec<TaggedVal>,
-            indirect_call_table: Vec<Option<usize>>,
+            {globals},
+            {indirect_call_table},
             {wasi_context}
          }}",
-        memory = if opts.fixed_mem_size.is_some() {
+        memory = {
+            if opts.fixed_mem_size.is_some() {
+                if !opts.no_alloc {
+                    format!("memory: Box<[u8; {}]>, memory_size_to_vm: usize", get_memory_backing_size(m, opts)?.0)
+                } else {
+                    format!("memory: [u8; {}]", get_memory_backing_size(m, opts)?.0) 
+                }
+            } else {
+                "memory: Vec<u8>".to_string()
+            }
+        },
+        globals = if opts.no_alloc {
             format!(
-                "memory: Box<[u8; {}]>, memory_size_to_vm: usize",
-                get_memory_backing_size(m, opts)?.0
+                "globals: [TaggedVal; {}]",
+                m.globals.len()
             )
         } else {
-            "memory: Vec<u8>".to_string()
+            "globals: Vec<TaggedVal>".to_string()
+        },
+        indirect_call_table = if !opts.no_alloc {
+            "indirect_call_table: Vec<Option<usize>>".into()
+        } else {
+            format!(
+                "indirect_call_table: [Option<usize>; {}]",
+                m.funcs.len()
+            )
         },
         wasi_context = if opts.generate_wasi_executable {
             "context: wasi_common::WasiCtx,"
@@ -2024,18 +2122,24 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
     Ok(format!(
         "{module_prefix}{no_std}\n\n\
          {imports}\n\n\
+         {panic_handler}\n\n
          {tagged_value_definitions}\n\n\
+         {static_function_return_def}
          {wasm_module}\n\n\
          {memory_accessors}\n",
         module_prefix = module_prefix,
         no_std = no_std,
-        imports = if opts.no_std_library {
+        panic_handler = panic_handler,
+        imports = if opts.no_alloc {
+            include_str!("../templates-for-generation/imports_no_alloc.rs")
+        } else if opts.no_std_library {
             include_str!("../templates-for-generation/imports_no_std.rs")
         } else {
             include_str!("../templates-for-generation/imports.rs")
         },
         tagged_value_definitions =
             include_str!("../templates-for-generation/tagged_value_definitions.rs"),
+        static_function_return_def = static_function_return_def,
         wasm_module = wasm_module,
         memory_accessors = memory_accessors,
     ))
@@ -2061,13 +2165,29 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
     let (mem_size, mem_size_to_vm) = get_memory_backing_size(m, opts)?;
 
     let memory_init = if opts.fixed_mem_size.is_some() {
-        format!(
-            "memory: Box::new([0u8; {}]), memory_size_to_vm: {}",
-            mem_size,
-            mem_size_to_vm.unwrap()
-        )
+        if !opts.no_alloc {
+            format!(
+                "memory: Box::new([0u8; {}]), memory_size_to_vm: {}",
+                mem_size,
+                mem_size_to_vm.unwrap()
+            )
+        } else {
+            format!("memory: [0u8; {}]", mem_size)
+        }
     } else {
         format!("memory: vec![0u8; {}]", mem_size)
+    };
+
+    let globals_init = if !opts.no_alloc {
+        "globals: vec![]".into()
+    } else {
+        format!("globals: [TaggedVal::Undefined; {}]", globals.len())
+    };
+
+    let indirect_call_table_init = if !opts.no_alloc {
+        "indirect_call_table: vec![]".into()
+    } else {
+        format!("indirect_call_table: [None; {}]", m.funcs.len())
     };
 
     // Print the module initializer
@@ -2078,11 +2198,11 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
              pub fn new() -> Self {{
                  let mut m = WasmModule {{
                      {memory_init},
-                     globals: vec![],
-                     indirect_call_table: vec![],
+                     {globals_init},
+                     {indirect_call_table_init},
                      {context} \
                  }};
-                 m.globals.resize_with({globals_size}, Default::default);
+                 {globals_resize}
                  {printed_globals}
                  {printed_elems}
                  {printed_data}
@@ -2096,7 +2216,17 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
             ""
         },
         memory_init = memory_init,
-        globals_size = globals.len(),
+        globals_init = globals_init,
+        globals_resize = {
+            if !opts.no_alloc {
+                format!(
+                    "m.globals.resize_with({globals_size}, Default::default);",
+                    globals_size = globals.len()
+                )
+            } else {
+                "".into()
+            }
+        },
         printed_globals = globals
             .iter()
             .enumerate()
@@ -2109,7 +2239,7 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
             .join("\n"),
         printed_elems = elem
             .iter()
-            .map(|e| print_elem("m", e))
+            .map(|e| print_elem("m", e, opts))
             .collect::<Maybe<Vec<_>>>()?
             .join("\n"),
         printed_data = data
@@ -2134,7 +2264,7 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
     if opts.type_based_indirect_calls {
         generated += &print_type_based_indirect_call_dispatch(m)?;
     } else {
-        generated += &print_indirect_call_dispatch(m)?;
+        generated += &print_indirect_call_dispatch(m, opts)?;
     }
     generated += "\n";
     dbgprintln!(0, "Generated CallIndirect redirector");
