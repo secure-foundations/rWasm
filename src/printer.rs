@@ -1888,6 +1888,14 @@ fn print_export(
 
 fn print_cargo_toml(opts: &CmdLineOpts) -> Maybe<()> {
     let cargo_toml_path = opts.output_directory.join("Cargo.toml");
+    if cargo_toml_path.exists() {
+        println!(
+            "WARNING: Cargo.toml already exists at {}. \
+             Not overwriting it.",
+            cargo_toml_path.display()
+        );
+        return Ok(());
+    }
     let package_name = opts
         .input_path
         .file_stem()
