@@ -8,6 +8,7 @@ enum IndirectFuncRet {
 }
 
 impl IndirectFuncRet {
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         use IndirectFuncRet::*;
         match self {
