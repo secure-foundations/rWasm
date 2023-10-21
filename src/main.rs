@@ -34,6 +34,9 @@ pub struct CmdLineOpts {
     /// Path to output directory
     #[clap(default_value = "./generated")]
     output_directory: std::path::PathBuf,
+    /// Customize the name of the generated Rust crate
+    #[clap(long)]
+    crate_name: Option<String>,
     /// Prevent reformatting, for debug purposes
     #[clap(short, long)]
     prevent_reformat: bool,

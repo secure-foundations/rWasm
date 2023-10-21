@@ -1896,11 +1896,14 @@ fn print_cargo_toml(opts: &CmdLineOpts) -> Maybe<()> {
         );
         return Ok(());
     }
-    let package_name = opts
-        .input_path
-        .file_stem()
-        .and_then(|n| n.to_str())
-        .unwrap_or("wasmmodule".into());
+    let package_name = match &opts.crate_name {
+        Some(n) => n.clone(),
+        None => "sandboxed-".to_owned() + opts
+            .input_path
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("wasmmodule".into())
+        };
     let dependencies = if opts.generate_wasi_executable {
         "\
         wasi-common = \"0.20.0\"\n\
@@ -1914,7 +1917,7 @@ fn print_cargo_toml(opts: &CmdLineOpts) -> Maybe<()> {
         format!(
             r#"
 [package]
-name = "sandboxed-{name}"
+name = "{name}"
 version = "{version}"
 authors = ["generated-by-{generator}-{version}"]
 edition = "2018"
