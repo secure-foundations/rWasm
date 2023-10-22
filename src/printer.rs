@@ -1927,14 +1927,11 @@ edition = "2018"
 
 [profile.release]
 debug = true
-{panic}
             "#,
             name = package_name,
             version = crate::PROGRAM_VERSION,
             generator = crate::PROGRAM_NAME,
             dependencies = dependencies,
-            panic = if opts.no_alloc { "panic = \"abort\"" } 
-            else { "" },
         ),
     )?)
 }
@@ -1994,15 +1991,6 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
         "#![no_std]\n"
     } else {
         ""
-    };
-    let panic_handler = if !opts.no_alloc {
-        "".into()
-    } else {
-        format!("
-            #[panic_handler]
-            fn panic(_info: &PanicInfo) -> ! {{
-                loop {{}}
-            }}")
     };
     // If we need to avoid alloc dependency, we need to generate
     // arrays for the return values of functions (can't use `Vec`).
@@ -2133,14 +2121,12 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
     Ok(format!(
         "{module_prefix}{no_std}\n\n\
          {imports}\n\n\
-         {panic_handler}\n\n
          {tagged_value_definitions}\n\n\
          {static_function_return_def}
          {wasm_module}\n\n\
          {memory_accessors}\n",
         module_prefix = module_prefix,
         no_std = no_std,
-        panic_handler = panic_handler,
         imports = if opts.no_alloc {
             include_str!("../templates-for-generation/imports_no_alloc.rs")
         } else if opts.no_std_library {
