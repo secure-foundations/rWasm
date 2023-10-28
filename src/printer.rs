@@ -1404,7 +1404,7 @@ fn print_global_initializer(g: &wasm::syntax::Global) -> Maybe<String> {
         ))?;
     }
     if let wasm::syntax::Instr::Const(c) = &g.init.0[0] {
-        Ok(c.to_string())
+        Ok(c.to_variant_string())
     } else {
         Err(eyre!(
             "Currently unsupported expression for global initialization"
@@ -1484,12 +1484,16 @@ fn print_data(self_name: &str, d: &wasm::syntax::Data) -> Maybe<String> {
             .map(|b| format!("{}", b))
             .collect::<Vec<_>>()
             .join(", ");
+        // we're not using `.copy_from_slice` because it is not const
+        // this allows for static initialization
         Ok(format!(
-            "{}.memory[{}..{}].copy_from_slice(&[{}]);",
-            self_name,
-            offset,
-            offset + len,
-            bytes
+            "// initialize data region [{offset}..{offset}+{len}]
+            let bytes = [{bytes}];
+            let mut i = {offset};
+            while i < {offset} + {len} {{
+                {self_name}.memory[i] = bytes[i - {offset}];
+                i += 1;
+            }}"
         ))
     } else {
         Err(eyre!("Currently unsupported expression for data offset"))?
@@ -1864,7 +1868,7 @@ fn print_export(
                 .typ;
             let getter = format!(
                 "impl WasmModule {{
-                     {}pub fn get_{}(&self) -> Option<{}> {{
+                     {}pub const fn get_{}(&self) -> Option<{}> {{
                          self.globals[{}].try_as_{}()
                      }}
                  }}",
@@ -2192,7 +2196,7 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
     generated += &format!(
         "impl WasmModule {{
              #[allow(unused_mut)]
-             pub fn new() -> Self {{
+             pub const fn new() -> Self {{
                  let mut m = WasmModule {{
                      {memory_init},
                      {globals_init},
@@ -2228,7 +2232,7 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
             .iter()
             .enumerate()
             .map(|(i, g)| Ok(format!(
-                "m.globals[{}] = TaggedVal::from({});",
+                "m.globals[{}] = {};",
                 i,
                 print_global_initializer(g)?
             )))
