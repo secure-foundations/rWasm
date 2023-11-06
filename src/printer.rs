@@ -1849,6 +1849,9 @@ fn print_export(
                     pub fn get_memory(&mut self) -> *mut u8 {
                         self.memory.as_mut_ptr()
                     }
+                    pub fn get_memory_size(&self) -> usize {
+                        self.memory.len()
+                    }
                 }"
                 .to_string())
             }
