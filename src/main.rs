@@ -90,6 +90,11 @@ pub struct CmdLineOpts {
     /// (Warning: experimental performance impact)
     #[clap(long)]
     no_alloc: bool,
+    /// Generate a module which can be passed a custom memory buffer for the
+    /// WebAssembly memory. This currently only works with --fixed-mem-size.
+    /// (Warning: experimental performance impact)
+    #[clap(long)]
+    extern_memory: bool,
 }
 
 fn main() -> Maybe<()> {
@@ -120,6 +125,11 @@ fn main() -> Maybe<()> {
             return Err(eyre!("Must use --fixed-mem-size when using --no-alloc"));
         }
         opts.no_std_library = true;
+    }
+    if opts.extern_memory {
+        if opts.fixed_mem_size.is_none() {
+            return Err(eyre!("Must use --fixed-mem-size when using --extern-memory"));
+        }
     }
 
     let inp = std::fs::read(&opts.input_path)?;

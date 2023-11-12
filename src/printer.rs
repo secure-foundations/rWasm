@@ -547,13 +547,13 @@ fn print_instr(
                 "self.memory"
             };
             let mem_reader = match &mem.extend {
-                None => format!("read_mem_{}(&{}, {} as usize)", mem.typ, self_mem, ea),
+                None => format!("read_mem_{}({}.as_ref(), {} as usize)", mem.typ, self_mem, ea),
                 Some((n, sx)) => {
                     if mem.typ == wasm::syntax::ValType::I32
                         || mem.typ == wasm::syntax::ValType::I64
                     {
                         format!(
-                            "read_mem_{}{}(&{}, {} as usize).and_then(|x| Some(x as {}))",
+                            "read_mem_{}{}({}.as_ref(), {} as usize).and_then(|x| Some(x as {}))",
                             sx, n, self_mem, ea, mem.typ
                         )
                     } else {
@@ -622,7 +622,7 @@ fn print_instr(
             };
             match &mem.bitwidth {
                 None => Ok(format!(
-                    "{}write_mem_{}(&mut {}, {} as usize, {})?;",
+                    "{}write_mem_{}({}.as_mut(), {} as usize, {})?;",
                     mem_trace, mem.typ, self_mem, ea, src
                 )),
                 Some(n) => {
@@ -630,7 +630,7 @@ fn print_instr(
                         || mem.typ == wasm::syntax::ValType::I64
                     {
                         Ok(format!(
-                            "{}write_mem_u{}(&mut {}, {} as usize, {} as u{})?;",
+                            "{}write_mem_u{}({}.as_mut(), {} as usize, {} as u{})?;",
                             mem_trace, n, self_mem, ea, src, n
                         ))
                     } else {
@@ -1681,7 +1681,7 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module, opts: &CmdLineOpts) ->
         .collect::<Maybe<Vec<_>>>()?
         .join("\n");
     Ok(format!(
-        "impl WasmModule {{
+        "impl WasmModule{lifetime} {{
              #[allow(dead_code)]
              fn indirect_call(&mut self, idx: usize, args: &[TaggedVal]) ->
                      Option<{}> {{
@@ -1691,16 +1691,17 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module, opts: &CmdLineOpts) ->
                      _ => None,
                  }}
              }}
-         }}",
+        }}",
         {
             if !opts.no_alloc { "Vec<TaggedVal>"  }
             else              { "IndirectFuncRet" }
         },
-        targets
+        targets,
+        lifetime = if !opts.extern_memory { "" } else { "<'_>" },
     ))
 }
 
-fn print_type_based_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<String> {
+fn print_type_based_indirect_call_dispatch(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<String> {
     let dispatchers = m
         .types
         .iter()
@@ -1755,7 +1756,9 @@ fn print_type_based_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<St
         .collect::<Vec<_>>()
         .join("\n");
 
-    Ok(format!("impl WasmModule {{ {} }}", dispatchers))
+    let lifetime = if !opts.extern_memory { "" } else { "<'_>" };
+
+    Ok(format!("impl WasmModule{lifetime} {{ {} }}", dispatchers))
 }
 
 fn is_snake_case(s: &str) -> bool {
@@ -1802,7 +1805,7 @@ fn print_export(
                 format!("{}", e.name)
             };
             Ok(format!(
-                "impl WasmModule {{
+                "impl WasmModule{lifetime} {{
                      {}pub fn {}{} {{
                          self.func_{}({})
                      }}
@@ -1824,6 +1827,7 @@ fn print_export(
                     .map(|i| format!("arg_{}", i))
                     .collect::<Vec<_>>()
                     .join(", "),
+                lifetime = if !opts.extern_memory { "" } else { "<'_>" },
             ))
         }
         wasm::syntax::ExportDesc::Table(_tbl_idx) => {
@@ -1831,25 +1835,24 @@ fn print_export(
         }
         wasm::syntax::ExportDesc::Mem(mem_idx) => {
             assert_eq!(mem_idx.0, 0);
+            let lifetime = if !opts.extern_memory { "" } else { "<'_>" };
             if opts.generate_as_wasi_library {
-                Ok("impl WasmModule {
+                Ok(format!("impl WasmModule{lifetime} {{
                     #[allow(dead_code)]
-                    pub fn get_memory(&mut self) -> &mut [u8] {
+                    pub fn get_memory(&mut self) -> &mut [u8] {{
                         &mut self.memory
-                    }
-                }"
-                .to_string())
+                    }}
+                }}"))
             } else {
-                Ok("impl WasmModule {
+                Ok(format!("impl WasmModule{lifetime} {{
                     #[allow(dead_code)]
-                    pub fn get_memory(&mut self) -> *mut u8 {
+                    pub fn get_memory(&mut self) -> *mut u8 {{
                         self.memory.as_mut_ptr()
-                    }
-                    pub fn get_memory_size(&self) -> usize {
+                    }}
+                    pub fn get_memory_size(&self) -> usize {{
                         self.memory.len()
-                    }
-                }"
-                .to_string())
+                    }}
+                }}"))
             }
         }
         wasm::syntax::ExportDesc::Global(glb_idx) => {
@@ -1865,8 +1868,9 @@ fn print_export(
                 .get(glb_idx.0 as usize)
                 .ok_or(eyre!("Invalid global for export"))?
                 .typ;
+            let lifetime = if !opts.extern_memory { "" } else { "<'_>" };
             let getter = format!(
-                "impl WasmModule {{
+                "impl WasmModule{lifetime} {{
                      {}pub const fn get_{}(&self) -> Option<{}> {{
                          self.globals[{}].try_as_{}()
                      }}
@@ -1874,7 +1878,7 @@ fn print_export(
                 non_snake_case_suppression, e.name, typ, glb_idx.0, typ
             );
             let setter = format!(
-                "impl WasmModule {{
+                "impl WasmModule{lifetime} {{
                      {}pub fn set_{}(&mut self, v: {}) {{
                          self.globals[{}] = TaggedVal::from(v);
                      }}
@@ -2046,18 +2050,33 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
     };
     let wasm_module = format!(
         "#[allow(dead_code)]
-         pub struct WasmModule {{
+         pub struct WasmModule{lifetime} {{
             {memory},
             {globals},
             {indirect_call_table},
             {wasi_context}
-         }}",
+        }}",
+        lifetime = {
+            if !opts.extern_memory {
+                ""
+            } else {
+                "<'a>"
+            }
+        },
         memory = {
             if opts.fixed_mem_size.is_some() {
-                if !opts.no_alloc {
-                    format!("memory: Box<[u8; {}]>, memory_size_to_vm: usize", get_memory_backing_size(m, opts)?.0)
+                let mem_val = if !opts.extern_memory {
+                    format!(
+                        "[u8; {}]",
+                        get_memory_backing_size(m, opts)?.0
+                    )
                 } else {
-                    format!("memory: [u8; {}]", get_memory_backing_size(m, opts)?.0) 
+                    "&'a mut [u8]".into()
+                };
+                if !opts.no_alloc {
+                    format!("memory: Box<{mem_val}>, memory_size_to_vm: usize")
+                } else {
+                    format!("memory: {mem_val}") 
                 }
             } else {
                 "memory: Vec<u8>".to_string()
@@ -2164,15 +2183,28 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
 
     let (mem_size, mem_size_to_vm) = get_memory_backing_size(m, opts)?;
 
+    let extern_mem_arg = if opts.extern_memory {
+        "mem_buf: &'a mut [u8]"
+    } else {
+        ""
+    };
     let memory_init = if opts.fixed_mem_size.is_some() {
+        let mem_val = if !opts.extern_memory {
+            format!(
+                "[0u8; {}]",
+                mem_size
+            )
+        } else {
+            "mem_buf".into()
+        };
         if !opts.no_alloc {
             format!(
-                "memory: Box::new([0u8; {}]), memory_size_to_vm: {}",
-                mem_size,
+                "memory: Box::new({}), memory_size_to_vm: {}",
+                mem_val,
                 mem_size_to_vm.unwrap()
             )
         } else {
-            format!("memory: [0u8; {}]", mem_size)
+            format!("memory: {}", mem_val)
         }
     } else {
         format!("memory: vec![0u8; {}]", mem_size)
@@ -2190,12 +2222,15 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
         format!("indirect_call_table: [None; {}]", m.funcs.len())
     };
 
+    let lifetime = if !opts.extern_memory { "" } else { "<'a>" };
+    let lifetime_elided = if !opts.extern_memory { "" } else { "<'_>" };
+
     // Print the module initializer
     generated += "\n";
     generated += &format!(
-        "impl WasmModule {{
+        "impl{lifetime} WasmModule{lifetime} {{
              #[allow(unused_mut)]
-             pub fn new() -> Self {{
+             pub fn new({extern_mem_arg}) -> Self {{
                  let mut m = WasmModule {{
                      {memory_init},
                      {globals_init},
@@ -2252,7 +2287,7 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
 
     // Print the functions
     generated += "\n";
-    generated += "impl WasmModule {\n";
+    generated += &format!("impl WasmModule{lifetime_elided} {{\n");
     for (i, _f) in funcs.iter().enumerate() {
         generated += &print_function(&m, wasm::syntax::FuncIdx(i as u32), opts)?;
     }
@@ -2262,7 +2297,7 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
     // Print the CallIndirect dispatch
     generated += "\n";
     if opts.type_based_indirect_calls {
-        generated += &print_type_based_indirect_call_dispatch(m)?;
+        generated += &print_type_based_indirect_call_dispatch(m, opts)?;
     } else {
         generated += &print_indirect_call_dispatch(m, opts)?;
     }
