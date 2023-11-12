@@ -1484,16 +1484,12 @@ fn print_data(self_name: &str, d: &wasm::syntax::Data) -> Maybe<String> {
             .map(|b| format!("{}", b))
             .collect::<Vec<_>>()
             .join(", ");
-        // we're not using `.copy_from_slice` because it is not const
-        // this allows for static initialization
         Ok(format!(
-            "// initialize data region [{offset}..{offset}+{len}]
-            let bytes = [{bytes}];
-            let mut i = {offset};
-            while i < {offset} + {len} {{
-                {self_name}.memory[i] = bytes[i - {offset}];
-                i += 1;
-            }}"
+            "{}.memory[{}..{}].copy_from_slice(&[{}]);",
+            self_name,
+            offset,
+            offset + len,
+            bytes
         ))
     } else {
         Err(eyre!("Currently unsupported expression for data offset"))?
