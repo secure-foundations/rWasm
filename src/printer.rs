@@ -2199,7 +2199,7 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
     generated += &format!(
         "impl WasmModule {{
              #[allow(unused_mut)]
-             pub const fn new() -> Self {{
+             pub fn new() -> Self {{
                  let mut m = WasmModule {{
                      {memory_init},
                      {globals_init},
