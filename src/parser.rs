@@ -1,3 +1,6 @@
+// parser macros yield unused assignments in the last parser
+#![allow(dead_code, unused_assignments)]
+
 use crate::wasm::syntax::*;
 use crate::Maybe;
 use color_eyre::eyre::eyre;
@@ -189,6 +192,7 @@ fn peek(inp: &[u8], n: usize) -> Parsed<&[u8]> {
     Ok((inp, v))
 }
 
+#[allow(unused)]    // could be useful in the future
 fn peek_at(inp: &[u8], pos: usize) -> Parsed<&u8> {
     let v = inp.get(pos).ok_or(eyre!("Insufficient data for parsing"))?;
     Ok((inp, v))
@@ -203,6 +207,7 @@ fn inp(inp: &[u8], n: usize) -> Parsed<&[u8]> {
     Ok((&inp[n..], v))
 }
 
+#[allow(unused)]    // could be useful in the future
 fn inp_dump(inp: &[u8]) -> Parsed<()> {
     trace!("Remaining: {:#x?}", inp);
     Ok((inp, ()))
