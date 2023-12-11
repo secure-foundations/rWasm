@@ -328,6 +328,15 @@ pub mod syntax {
             pub names: Names, // non-standard custom section that appears in WASI
         }
 
+        impl Module {
+            pub fn imports_memory(&self) -> bool {
+                self.imports.iter().any(|i| match &i.desc {
+                    ImportDesc::Mem(_) => true,
+                    _ => false,
+                })
+            }
+        }
+
         pub struct Names {
             pub module: Option<Name>,
             pub functions: std::collections::HashMap<FuncIdx, Name>,

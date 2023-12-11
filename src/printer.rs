@@ -3,6 +3,32 @@ use crate::CmdLineOpts;
 use crate::Maybe;
 use color_eyre::eyre::eyre;
 
+fn mem_type(
+    m: &wasm::syntax::Module,
+    opts: &CmdLineOpts
+) -> String {
+    let ext_mem = opts.extern_memory;
+    let fixed_size = opts.fixed_mem_size.is_some();
+
+    match (ext_mem, fixed_size) {
+        (true, true) =>     format!("&'a mut [u8]"),
+        (true, false) =>    format!("&'a mut Vec<u8>"),
+        (false, true) =>    format!("[u8; {}]", get_memory_backing_size(m, opts).unwrap().0),
+        (false, false) =>   format!("Vec<u8>"),
+    }
+}
+
+// fn mem_imported(
+//     m: &wasm::syntax::Module,
+// ) -> bool {
+//     m.imports.iter().any(|i| {
+//         match &i.desc {
+//             wasm::syntax::ImportDesc::Memory(_) => true,
+//             _ => false,
+//         }
+//     })
+// }
+
 fn print_iunop(
     bs: &wasm::syntax::BitSize,
     o: &wasm::syntax::instructions::intop::UnOp,
@@ -2063,25 +2089,7 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
                 "<'a>"
             }
         },
-        memory = {
-            if opts.fixed_mem_size.is_some() {
-                let mem_val = if !opts.extern_memory {
-                    format!(
-                        "[u8; {}]",
-                        get_memory_backing_size(m, opts)?.0
-                    )
-                } else {
-                    "&'a mut [u8]".into()
-                };
-                if !opts.no_alloc {
-                    format!("memory: Box<{mem_val}>, memory_size_to_vm: usize")
-                } else {
-                    format!("memory: {mem_val}") 
-                }
-            } else {
-                "memory: Vec<u8>".to_string()
-            }
-        },
+        memory = format!("memory: {}", mem_type(m, opts)),
         globals = if opts.no_alloc {
             format!(
                 "globals: [TaggedVal; {}]",
@@ -2181,33 +2189,20 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
 
     let mut generated: String = print_generated_code_prefix(m, opts)?;
 
-    let (mem_size, mem_size_to_vm) = get_memory_backing_size(m, opts)?;
-
     let extern_mem_arg = if opts.extern_memory {
-        "mem_buf: &'a mut [u8]"
-    } else {
-        ""
+        format!("mem_buf: {}", mem_type(m, opts))
+    } else { 
+        "".into() 
     };
-    let memory_init = if opts.fixed_mem_size.is_some() {
-        let mem_val = if !opts.extern_memory {
-            format!(
-                "[0u8; {}]",
-                mem_size
-            )
-        } else {
-            "mem_buf".into()
-        };
-        if !opts.no_alloc {
-            format!(
-                "memory: Box::new({}), memory_size_to_vm: {}",
-                mem_val,
-                mem_size_to_vm.unwrap()
-            )
-        } else {
-            format!("memory: {}", mem_val)
-        }
+    let memory_init = if opts.extern_memory {
+        "memory: mem_buf".into()
     } else {
-        format!("memory: vec![0u8; {}]", mem_size)
+        let (mem_size, _) = get_memory_backing_size(m, opts)?;
+        if opts.fixed_mem_size.is_some() {
+            format!("memory: [0u8; {}]", mem_size)
+        } else {
+            format!("memory: vec![0u8; {}]", mem_size)
+        }
     };
 
     let globals_init = if !opts.no_alloc {
