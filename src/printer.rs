@@ -7,7 +7,7 @@ fn mem_type(
     m: &wasm::syntax::Module,
     opts: &CmdLineOpts
 ) -> String {
-    let ext_mem = opts.extern_memory;
+    let ext_mem = mem_imported(m);
     let fixed_size = opts.fixed_mem_size.is_some();
 
     match (ext_mem, fixed_size) {
@@ -18,16 +18,16 @@ fn mem_type(
     }
 }
 
-// fn mem_imported(
-//     m: &wasm::syntax::Module,
-// ) -> bool {
-//     m.imports.iter().any(|i| {
-//         match &i.desc {
-//             wasm::syntax::ImportDesc::Memory(_) => true,
-//             _ => false,
-//         }
-//     })
-// }
+fn mem_imported(
+    m: &wasm::syntax::Module,
+) -> bool {
+    m.imports.iter().any(|i| {
+        match &i.desc {
+            wasm::syntax::ImportDesc::Mem(_) => true,
+            _ => false,
+        }
+    })
+}
 
 fn print_iunop(
     bs: &wasm::syntax::BitSize,
@@ -1723,11 +1723,11 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module, opts: &CmdLineOpts) ->
             else              { "IndirectFuncRet" }
         },
         targets,
-        lifetime = if !opts.extern_memory { "" } else { "<'_>" },
+        lifetime = if !mem_imported(m) { "" } else { "<'_>" },
     ))
 }
 
-fn print_type_based_indirect_call_dispatch(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<String> {
+fn print_type_based_indirect_call_dispatch(m: &wasm::syntax::Module) -> Maybe<String> {
     let dispatchers = m
         .types
         .iter()
@@ -1782,7 +1782,7 @@ fn print_type_based_indirect_call_dispatch(m: &wasm::syntax::Module, opts: &CmdL
         .collect::<Vec<_>>()
         .join("\n");
 
-    let lifetime = if !opts.extern_memory { "" } else { "<'_>" };
+    let lifetime = if !mem_imported(m) { "" } else { "<'_>" };
 
     Ok(format!("impl WasmModule{lifetime} {{ {} }}", dispatchers))
 }
@@ -1853,7 +1853,7 @@ fn print_export(
                     .map(|i| format!("arg_{}", i))
                     .collect::<Vec<_>>()
                     .join(", "),
-                lifetime = if !opts.extern_memory { "" } else { "<'_>" },
+                lifetime = if !mem_imported(m) { "" } else { "<'_>" },
             ))
         }
         wasm::syntax::ExportDesc::Table(_tbl_idx) => {
@@ -1861,7 +1861,7 @@ fn print_export(
         }
         wasm::syntax::ExportDesc::Mem(mem_idx) => {
             assert_eq!(mem_idx.0, 0);
-            let lifetime = if !opts.extern_memory { "" } else { "<'_>" };
+            let lifetime = if !mem_imported(m) { "" } else { "<'_>" };
             if opts.generate_as_wasi_library {
                 Ok(format!("impl WasmModule{lifetime} {{
                     #[allow(dead_code)]
@@ -1894,7 +1894,7 @@ fn print_export(
                 .get(glb_idx.0 as usize)
                 .ok_or(eyre!("Invalid global for export"))?
                 .typ;
-            let lifetime = if !opts.extern_memory { "" } else { "<'_>" };
+            let lifetime = if !mem_imported(m) { "" } else { "<'_>" };
             let getter = format!(
                 "impl WasmModule{lifetime} {{
                      {}pub const fn get_{}(&self) -> Option<{}> {{
@@ -2083,7 +2083,7 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
             {wasi_context}
         }}",
         lifetime = {
-            if !opts.extern_memory {
+            if !mem_imported(m) {
                 ""
             } else {
                 "<'a>"
@@ -2189,12 +2189,12 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
 
     let mut generated: String = print_generated_code_prefix(m, opts)?;
 
-    let extern_mem_arg = if opts.extern_memory {
+    let extern_mem_arg = if mem_imported(m) {
         format!("mem_buf: {}", mem_type(m, opts))
     } else { 
         "".into() 
     };
-    let memory_init = if opts.extern_memory {
+    let memory_init = if mem_imported(m) {
         "memory: mem_buf".into()
     } else {
         let (mem_size, _) = get_memory_backing_size(m, opts)?;
@@ -2217,8 +2217,8 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
         format!("indirect_call_table: [None; {}]", m.funcs.len())
     };
 
-    let lifetime = if !opts.extern_memory { "" } else { "<'a>" };
-    let lifetime_elided = if !opts.extern_memory { "" } else { "<'_>" };
+    let lifetime = if !mem_imported(m) { "" } else { "<'a>" };
+    let lifetime_elided = if !mem_imported(m) { "" } else { "<'_>" };
 
     // Print the module initializer
     generated += "\n";
@@ -2292,7 +2292,7 @@ pub fn print_module(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> Maybe<()> {
     // Print the CallIndirect dispatch
     generated += "\n";
     if opts.type_based_indirect_calls {
-        generated += &print_type_based_indirect_call_dispatch(m, opts)?;
+        generated += &print_type_based_indirect_call_dispatch(m)?;
     } else {
         generated += &print_indirect_call_dispatch(m, opts)?;
     }

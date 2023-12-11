@@ -90,12 +90,6 @@ pub struct CmdLineOpts {
     /// (Warning: experimental performance impact)
     #[clap(long)]
     no_alloc: bool,
-    /// Generate a module which can be passed a custom memory buffer for the
-    /// WebAssembly memory.
-    /// This option is automatically activated if the module imports its memory.
-    /// (Warning: experimental performance impact)
-    #[clap(long)]
-    extern_memory: bool,
 }
 
 fn main() -> Maybe<()> {
@@ -127,17 +121,11 @@ fn main() -> Maybe<()> {
         }
         opts.no_std_library = true;
     }
-    // if opts.extern_memory {
-    //     if opts.fixed_mem_size.is_none() {
-    //         return Err(eyre!("Must use --fixed-mem-size when using --extern-memory"));
-    //     }
-    // }
 
     let inp = std::fs::read(&opts.input_path)?;
     println!("Finished reading");
     let module = parser::parse(&inp)?;
     println!("Finished parsing");
-    opts.extern_memory = opts.extern_memory || module.imports_memory();
     printer::print_module(&module, &opts)?;
 
     println!("Finished");
