@@ -2089,7 +2089,7 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
                 "<'a>"
             }
         },
-        memory = format!("memory: {}", mem_type(m, opts)),
+        memory = format!("pub memory: {}", mem_type(m, opts)),
         globals = if opts.no_alloc {
             format!(
                 "globals: [TaggedVal; {}]",
