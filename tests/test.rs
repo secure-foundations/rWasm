@@ -70,7 +70,7 @@ fn run_test(path: &Path, args: &[String]) {
 
 #[test]
 fn fibonacci() {
-    let p = Path::new("tests/wasm/fib.wasm");
+    let p = Path::new("examples/fib.wasm");
     run_test(&p, &[]);
     run_test(&p, &[
         "--fixed-mem-size".to_string(),
@@ -82,12 +82,3 @@ fn fibonacci() {
         "--no-alloc".to_string(),
     ]);
 }
-
-// #[test]
-// fn hello_wasi() {
-//     let p = Path::new("tests/wasm/hello_wasi.wasm");
-//     run_test(&p, &[
-//         "--wasi-executable".to_string(),
-//         "--wasi-library".to_string(),
-//     ]);
-// }
