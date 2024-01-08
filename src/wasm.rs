@@ -186,6 +186,22 @@ pub mod syntax {
             }
         }
 
+        impl Const {
+            /// Convert to a string and include the variant name.
+            /// Example: `Const::I32(42).to_variant_str()` returns `"I32(42i32)"`
+            /// whereas `Const::I32(42).to_string()` returns `"42i32"`.
+            pub fn to_variant_string(&self) -> String {
+                use Const::*;
+                let variant_str: String = match self {
+                    I32(_) => "I32".into(),
+                    I64(_) => "I64".into(),
+                    F32(_) => "F32".into(),
+                    F64(_) => "F64".into(),
+                };
+                format!("{}({})", variant_str, self.to_string())
+            }
+        }
+
         #[derive(Debug)]
         pub enum BitSize {
             B32,
