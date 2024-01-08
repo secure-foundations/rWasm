@@ -13,3 +13,6 @@ color-eyre = "0.6.2"
 # Speed up `backtrace` even on a debug build. Suggested by `color-eyre`.
 [profile.dev.package.backtrace]
 opt-level = 3
+
+[dev-dependencies]
+wasmtime = "16.0.0"

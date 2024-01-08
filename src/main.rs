@@ -92,10 +92,8 @@ pub struct CmdLineOpts {
     no_alloc: bool,
 }
 
-fn main() -> Maybe<()> {
+pub fn run_app(mut opts: CmdLineOpts) -> Maybe<()> {
     color_eyre::install()?;
-
-    let mut opts = CmdLineOpts::parse();
 
     DEBUG_PRINT_LEVEL.store(opts.debug, std::sync::atomic::Ordering::Relaxed);
 
@@ -131,4 +129,8 @@ fn main() -> Maybe<()> {
     println!("Finished");
 
     Ok(())
+}
+
+fn main() -> Maybe<()> {
+    run_app(CmdLineOpts::parse())
 }

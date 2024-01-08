@@ -1897,7 +1897,7 @@ fn print_export(
             let lifetime = if !mem_imported(m) { "" } else { "<'_>" };
             let getter = format!(
                 "impl WasmModule{lifetime} {{
-                     {}pub const fn get_{}(&self) -> Option<{}> {{
+                     {}pub fn get_{}(&self) -> Option<{}> {{
                          self.globals[{}].try_as_{}()
                      }}
                  }}",
