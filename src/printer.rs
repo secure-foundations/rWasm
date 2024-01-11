@@ -1681,7 +1681,7 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module, opts: &CmdLineOpts) ->
             } else {
                 "let rets = "
             };
-            let ret = if !opts.no_alloc {
+            let ret = if !opts.static_func_rets {
                 format!("vec![{}]", rets)
             } else {
                 format!("IndirectFuncRet::Ret{}([{}])", num_rets, rets)
@@ -1719,8 +1719,11 @@ fn print_indirect_call_dispatch(m: &wasm::syntax::Module, opts: &CmdLineOpts) ->
              }}
         }}",
         {
-            if !opts.no_alloc { "Vec<TaggedVal>"  }
-            else              { "IndirectFuncRet" }
+            if !opts.static_func_rets { 
+                "Vec<TaggedVal>" 
+            } else { 
+                "IndirectFuncRet" 
+            }
         },
         targets,
         lifetime = if !mem_imported(m) { "" } else { "<'_>" },
@@ -2027,7 +2030,7 @@ fn print_generated_code_prefix(m: &wasm::syntax::Module, opts: &CmdLineOpts) -> 
     };
     // If we need to avoid alloc dependency, we need to generate
     // arrays for the return values of functions (can't use `Vec`).
-    let static_function_return_def = if opts.no_alloc {
+    let static_function_return_def = if opts.static_func_rets {
         // Find the maximum number of return values of all functions
         let max_rets = m
             .funcs

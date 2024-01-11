@@ -85,8 +85,14 @@ pub struct CmdLineOpts {
     /// Generate a `no_std` library, limiting usage to `core` and `alloc`
     #[clap(long)]
     no_std_library: bool,
-    /// Generate statically allocated, heapless code (implies --no-std-library,
-    /// requires --fixed-mem-size)
+    /// Instead of returning a vector of return values from indirect function calls,
+    /// return a fixed-length array of return values, whose length is determined by the
+    /// maximum number of return values of any function in the module. (Warning: experimental
+    /// performance impact)
+    #[clap(long)]
+    static_func_rets: bool,
+    /// Generate statically allocated, heapless code (implies --no-std-library
+    /// and --static-func-rets, requires --fixed-mem-size)
     /// (Warning: experimental performance impact)
     #[clap(long)]
     no_alloc: bool,
@@ -118,6 +124,7 @@ pub fn run_app(mut opts: CmdLineOpts) -> Maybe<()> {
             return Err(eyre!("Must use --fixed-mem-size when using --no-alloc"));
         }
         opts.no_std_library = true;
+        opts.static_func_rets = true;
     }
 
     let inp = std::fs::read(&opts.input_path)?;
