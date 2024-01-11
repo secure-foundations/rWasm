@@ -9,6 +9,7 @@ edition = "2018"
 [dependencies]
 clap = { version = "3.2.22", features = ["derive"] }
 color-eyre = "0.6.2"
+colored = "2.1.0"
 
 # Speed up `backtrace` even on a debug build. Suggested by `color-eyre`.
 [profile.dev.package.backtrace]

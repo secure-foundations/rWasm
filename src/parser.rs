@@ -4,6 +4,7 @@
 use crate::wasm::syntax::*;
 use crate::Maybe;
 use color_eyre::eyre::eyre;
+use colored::Colorize;
 use std::collections::HashMap;
 use std::convert::TryInto;
 
@@ -45,6 +46,12 @@ macro_rules! trace {
 macro_rules! err {
     ($($args:expr),*) => {{
         return Err(eyre!($($args,)*));
+    }}
+}
+
+macro_rules! warn {
+    ($($args:tt)*) => {{
+        eprintln!("{}", format_args!("WARNING -- {}", $($args)*).to_string().green());
     }}
 }
 
@@ -880,11 +887,9 @@ generate! { module -> Module = {
             let mut data: &[u8] = data;
             let names = run_parser!(names(data));
             // below check seems broken, see https://github.com/secure-foundations/rWasm/issues/2
-            // if data.len() == 0 {
-            //     names
-            // } else {
-            //     err!("Unused bytes in the custom name section")
-            // }
+            if data.len() != 0 {
+                warn!("Unused bytes in the custom name section; ingoring")
+            }
             names
         } else {
             Names {
