@@ -39,7 +39,7 @@ macro_rules! tagged_value_conversion {
         impl TaggedVal {
             #[inline]
             #[allow(dead_code)]
-            const fn $try_as(&self) -> Option<$ty> {
+            fn $try_as(&self) -> Option<$ty> {
                 if let $e(v) = self {
                     Some(*v)
                 } else {
