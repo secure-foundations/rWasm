@@ -1,3 +1,5 @@
 *~
 /generated
-/target
+target
+.vscode
+*.wat
