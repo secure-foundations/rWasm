@@ -273,6 +273,8 @@ pub mod syntax {
             MemStore(MemStore),
             MemSize,
             MemGrow,
+            MemCopy,
+            MemFill,
 
             // Control instructions
             Nop,

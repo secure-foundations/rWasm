@@ -560,6 +560,8 @@ generate! { instr -> Instr = {
                 0x05 => Instr::ICvtOp(BitSize::B64, intop::CvtOp::TruncSatUF32),
                 0x06 => Instr::ICvtOp(BitSize::B64, intop::CvtOp::TruncSatSF64),
                 0x07 => Instr::ICvtOp(BitSize::B64, intop::CvtOp::TruncSatUF64),
+                0x0a => { run!(expect_byte(0x00)); run!(expect_byte(0x00)); Instr::MemCopy },
+                0x0b => { run!(expect_byte(0x00)); Instr::MemFill },
                 b => err!("Invalid saturation trunctation {:#x}", b),
             }
         }
