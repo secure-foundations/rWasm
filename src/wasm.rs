@@ -47,7 +47,7 @@ pub mod syntax {
 
         pub struct MemType(pub Limits);
 
-        pub struct TableType(pub Limits, pub ElemType);
+        pub struct TableType(#[expect(dead_code)] pub Limits, pub ElemType);
         pub enum ElemType {
             // XXX
             FuncRef,
@@ -211,6 +211,7 @@ pub mod syntax {
         #[derive(Debug)]
         pub struct MemArg {
             pub offset: u32,
+            #[expect(dead_code)]
             pub align: u32,
         }
 
@@ -306,15 +307,19 @@ pub mod syntax {
             pub globals: Vec<Global>,
             pub elem: Vec<Elem>,
             pub data: Vec<Data>,
+            #[expect(dead_code)]
             pub start: Option<Start>,
+            #[expect(dead_code)]
             pub imports: Vec<Import>,
             pub exports: Vec<Export>,
             pub names: Names, // non-standard custom section that appears in WASI
         }
 
         pub struct Names {
+            #[expect(dead_code)]
             pub module: Option<Name>,
             pub functions: std::collections::HashMap<FuncIdx, Name>,
+            #[expect(dead_code)]
             pub locals: std::collections::HashMap<FuncIdx, Vec<Name>>,
         }
 
@@ -354,6 +359,7 @@ pub mod syntax {
         }
 
         pub struct Start {
+            #[expect(dead_code)]
             pub func: FuncIdx,
         }
 
@@ -375,9 +381,9 @@ pub mod syntax {
         }
         pub enum ImportDesc {
             Func(TypeIdx),
-            Table(TableType),
-            Mem(MemType),
-            Global(GlobalType),
+            Table(#[expect(dead_code)] TableType),
+            Mem(#[expect(dead_code)] MemType),
+            Global(#[expect(dead_code)] GlobalType),
         }
     }
 }

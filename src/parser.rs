@@ -25,7 +25,7 @@ macro_rules! generate {
     };
 
     ($id:ident($($fnarg:ident : $fntyp:ty),*) -> $ty:ty = $body: expr ) => {
-        fn $id(mut inp: &[u8], $($fnarg : $fntyp,)*) -> Parsed<$ty> {
+        fn $id(mut inp: &[u8], $($fnarg : $fntyp,)*) -> Parsed<'_, $ty> {
             with_dollar_sign! {
                 ($d:tt) => {
                     #[allow(unused_macros)]
@@ -113,7 +113,7 @@ macro_rules! run_manual {
     }};
 }
 
-fn leb128_u(mut inp: &[u8], bits: usize) -> Parsed<u64> {
+fn leb128_u(mut inp: &[u8], bits: usize) -> Parsed<'_, u64> {
     let n = inp[0] as u64;
     inp = &inp[1..];
 
@@ -129,7 +129,7 @@ fn leb128_u(mut inp: &[u8], bits: usize) -> Parsed<u64> {
     }
 }
 
-fn leb128_s(mut inp: &[u8], bits: usize) -> Parsed<i64> {
+fn leb128_s(mut inp: &[u8], bits: usize) -> Parsed<'_, i64> {
     let n = inp[0] as u64;
     inp = &inp[1..];
 
@@ -174,7 +174,7 @@ generate! {f64 -> f64 = f64::from_le_bytes(inp![..8].try_into()?)}
 
 generate! {s33 -> i64 = run!(leb128_s(33))}
 
-fn vec<T, F>(mut inp: &[u8], elem: F) -> Parsed<Vec<T>>
+fn vec<T, F>(mut inp: &[u8], elem: F) -> Parsed<'_, Vec<T>>
 where
     F: Fn(&[u8]) -> Parsed<T>,
 {
@@ -280,7 +280,7 @@ where
     Ok((inp, (res, v)))
 }
 
-fn vec_until<T, F>(inp: &[u8], elem: F, until: u8) -> Parsed<Vec<T>>
+fn vec_until<T, F>(inp: &[u8], elem: F, until: u8) -> Parsed<'_, Vec<T>>
 where
     F: Fn(&[u8]) -> Parsed<T>,
 {
@@ -592,7 +592,7 @@ macro_rules! section {
         section! {$n @ vec![], $name -> Vec<$ty> = $body}
     };
     ($n:literal @ $default:expr, $name:ident -> $ty:ty = $body:expr) => {
-        fn $name(mut inp: &[u8]) -> Parsed<$ty> {
+        fn $name(mut inp: &[u8]) -> Parsed<'_, $ty> {
             generate! { aux -> $ty = $body }
             match expect_byte(inp, $n) {
                 Ok((inp1, ())) => {
