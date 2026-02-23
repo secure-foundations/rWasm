@@ -38,7 +38,7 @@ pub struct CmdLineOpts {
     #[clap(short, long)]
     prevent_reformat: bool,
     /// Enable debugging (can be used multiple times)
-    #[clap(short, parse(from_occurrences))]
+    #[clap(short, action = clap::ArgAction::Count)]
     debug: u8,
     /// Generate a WASI binary
     #[clap(short = 'w', long = "wasi-executable")]
